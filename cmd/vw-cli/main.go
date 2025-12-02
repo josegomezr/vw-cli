@@ -9,6 +9,11 @@ import (
 	"net/url"
 	"os"
 	"time"
+
+	"github.com/josegomezr/vw-cli/internal/api"
+	"github.com/josegomezr/vw-cli/internal/crypto"
+	"github.com/josegomezr/vw-cli/internal/symmetric_key"
+	"github.com/josegomezr/vw-cli/internal/utils"
 )
 
 // TODO: split this into separate files & packages
@@ -21,25 +26,24 @@ type VWConfig struct {
 }
 
 type VWState struct {
-	AccessToken    string `json:"access_token"`
-	ExpiresAtEpoch int64  `json:"expires_at_epoch"`
-	ExpiresIn      int64  `json:"expires_in"`
-	TokenType      string `json:"token_type"`
-	Kdf            int64  `json:"Kdf"`
-	KdfIterations  int64  `json:"KdfIterations"`
-	// KdfMemory string `json:"KdfMemory"`
-	// KdfParallelism string `json:"KdfParallelism"`
-	Key                 string `json:"Key"`
-	PrivateKey          string `json:"PrivateKey"`
-	ResetMasterPassword bool   `json:"ResetMasterPassword"`
-	Scope               string `json:"scope"`
-	SessionKey          []byte `json:"session-key"`
+	AccessToken         string           `json:"access_token"`
+	ExpiresAtEpoch      int64            `json:"expires_at_epoch"`
+	ExpiresIn           int64            `json:"expires_in"`
+	Kdf                 int64            `json:"Kdf"`
+	KdfIterations       int64            `json:"KdfIterations"`
+	KdfMemory           string           `json:"KdfMemory"`
+	KdfParallelism      string           `json:"KdfParallelism"`
+	Key                 string           `json:"Key"`
+	PrivateKey          string           `json:"PrivateKey"`
+	ResetMasterPassword bool             `json:"ResetMasterPassword"`
+	LatestSync          api.SyncResponse `json:"latest_sync"`
 }
 
 type VW struct {
-	cfgdir string
-	cfg    *VWConfig
-	state  *VWState
+	cfgdir  string
+	cfg     *VWConfig
+	state   *VWState
+	userKey symmetric_key.SymmetricKey
 }
 
 // TODO: bring here a proper http client that takes care of the auth using the
@@ -84,6 +88,7 @@ func (vw *VW) Login() (err error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		io.Copy(os.Stdout, resp.Body)
 		return fmt.Errorf("http-error-not-200")
 	}
 
@@ -93,17 +98,24 @@ func (vw *VW) Login() (err error) {
 	}
 
 	// TODO: Extract this into SaveState()
-
-	// TODO: Pull the email out of the /api/accounts/profile endpoint to avoid
-	// saving it on configs.
-
 	file, err := os.Create(vw.cfgdir + "state.file")
 	if err != nil {
 		return fmt.Errorf("error-state-file: %w", err)
 	}
 	defer file.Close()
 	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
+	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
+		return fmt.Errorf("error-flush-state: %w", err)
+	}
 
+	syncObj, err := vw.Sync()
+	if err != nil {
+		return fmt.Errorf("sync-state: %w", err)
+	}
+
+	vw.state.LatestSync = *syncObj
+
+	file.Seek(0, 0)
 	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
 		return fmt.Errorf("error-flush-state: %w", err)
 	}
@@ -133,24 +145,52 @@ func (vw *VW) LoadConfig() error {
 }
 
 func (vw *VW) LoadState() error {
+	state := &VWState{}
+	vw.state = state
+
 	file, err := os.Open(vw.cfgdir + "state.file")
 	if err != nil {
-		if err == io.EOF {
+		if err == io.EOF || os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("error-open: %w", err)
 	}
+	defer file.Close()
 
-	state := VWState{}
-
-	if err := json.NewDecoder(file).Decode(&state); err != nil {
+	if err := json.NewDecoder(file).Decode(state); err != nil {
 		if err == io.EOF {
 			return nil
 		}
 		return fmt.Errorf("error-decode: %w", err)
 	}
 
-	vw.state = &state
+	return nil
+}
+
+func (vw *VW) DecryptUserKey() error {
+	masterkey, err := deriveDecryptionKeyFromEmailPassword(
+		vw.state.LatestSync.Profile.Email,
+		vw.cfg.Password,
+	)
+	if err != nil {
+		return err
+	}
+
+	encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
+	if err != nil {
+		return err
+	}
+
+	key, err := symmetric_key.AES_CBC_256_decrypt(masterkey, encsymkey.IV(), encsymkey.Data())
+	if err != nil {
+		return err
+	}
+
+	symkey, err := symmetric_key.NewSymmetricKey(key)
+	if err != nil {
+		return err
+	}
+	vw.userKey = symkey
 	return nil
 }
 
@@ -168,66 +208,48 @@ func main() {
 	if err := vw.LoadState(); err != nil {
 		log.Fatalf("error-load-state: %s", err)
 	}
+
 	if err := vw.Login(); err != nil {
 		log.Fatalf("error-login: %s", err)
 	}
 
-	masterkey, _ := deriveDecryptionKeyFromEmailPassword(
-		vw.cfg.Email, // TODO: pull email out of /api/accounts/profile
-		vw.cfg.Password,
-	)
-
-	privkey, err := ParseEncryptedString(vw.state.Key)
-	if err != nil {
-		panic(err)
+	if err := vw.DecryptUserKey(); err != nil {
+		log.Fatalf("error-decrypt: %s", err)
 	}
 
-	// TODO: encapsulate all of this into a single fn to get all the way to the
-	// symkey in a single call
-	key, err := AES_CBC_256_decrypt(masterkey, privkey.IV(), privkey.Data())
-	if err != nil {
-		panic(err)
-	}
-
-	symkey, err := NewSymmetricKey(key)
-	if err != nil {
-		panic(err)
-	}
-
-	// TODO: Save folders & ciphers locally encrypted
-	// TODO: Search after saved.
-
-	folderIt, err := vw.ListFolders()
-	if err != nil {
-		panic(err)
-	}
-
-	for _, folderObj := range folderIt {
-		encFolderName, err := ParseEncryptedString(folderObj.Name)
-		if err != nil {
-			panic(err)
+	folders := make(map[string]string)
+	{
+		// Folder cache
+		folders[""] = "-"
+		for _, folderObj := range vw.state.LatestSync.Folders {
+			folder := utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(folderObj.Name))))
+			folders[folderObj.Id] = folder
 		}
-		folder, err := AES_CBC_256_decrypt(symkey.Encryption(), encFolderName.IV(), encFolderName.Data())
-		if err != nil {
-			panic(err)
+	}
+
+	// List all secrets
+	{
+		fmt.Printf("%s,%s,%s\n", "ID", "Folder", "Name", "Password")
+		for _, cipherObj := range vw.state.LatestSync.Ciphers {
+			if cipherObj.OrganizationId != "" {
+				continue
+			}
+			cipher := utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Name))))
+
+			pw := ""
+
+			if pwR := cipherObj.Login.Password; pwR != "" {
+				// pw = utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Login.Password))))
+			}
+
+			fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipher, pw)
 		}
-		fmt.Printf("---\nid: %s\nenc: %s\ndecr:%s\n...\n", folderObj.Id, folderObj.Name, string(folder))
 	}
 }
 
 // TODO: separate this into file/packages.
 
-type folderItem struct {
-	Id     string `json:"id"`
-	Name   string `json:"name"`
-	Object string `json:"object"`
-}
-
-type foldersResp struct {
-	Data []folderItem `json:"data"`
-}
-
-func (vw *VW) ListFolders() ([]folderItem, error) {
+func (vw *VW) ListFolders() ([]api.FolderObject, error) {
 	bwUrl := vw.cfg.BitwardenURL + "/api/folders"
 
 	req, err := http.NewRequest("GET", bwUrl, nil)
@@ -238,9 +260,27 @@ func (vw *VW) ListFolders() ([]folderItem, error) {
 	}
 	defer resp.Body.Close()
 
-	r := &foldersResp{}
+	r := &api.FoldersResponse{}
 	if err := json.NewDecoder(resp.Body).Decode(r); err != nil {
 		return nil, fmt.Errorf("error-decode-state: %w", err)
 	}
 	return r.Data, nil
+}
+
+func (vw *VW) Sync() (*api.SyncResponse, error) {
+	bwUrl := vw.cfg.BitwardenURL + "/api/sync"
+
+	req, err := http.NewRequest("GET", bwUrl, nil)
+	req.Header.Add("Authorization", "Bearer "+vw.state.AccessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		io.Copy(os.Stdout, resp.Body)
+		return nil, fmt.Errorf("http-error: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		io.Copy(os.Stdout, resp.Body)
+		return nil, fmt.Errorf("bad status code for sync")
+	}
+	return api.NewSyncResponseFromReader(resp.Body)
 }
