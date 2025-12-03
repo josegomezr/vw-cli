@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha256"
 	"fmt"
 )
 
@@ -30,4 +32,40 @@ func AES_CBC_256_decrypt(key, iv, data []byte) ([]byte, error) {
 		}
 	}
 	return ciphertext, nil
+}
+
+func AES_CBC_256_HMAC_decrypt(key, hmacKey, iv, data, mac []byte) ([]byte, error) {
+	macmsg := []byte{}
+	macmsg = append(macmsg, iv...)
+	macmsg = append(macmsg, data...)
+	if !ValidMAC(macmsg, mac, hmacKey) {
+		return nil, fmt.Errorf("Invalid HMAC")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("Cipher error: %w", err)
+	}
+	ciphertext := bytes.Clone(data)
+
+	mode := cipher.NewCBCDecrypter(block, iv)
+	mode.CryptBlocks(ciphertext, ciphertext)
+
+	clen := len(ciphertext)
+	pd := aes.BlockSize - len(ciphertext)%aes.BlockSize
+
+	if pd > 0 {
+		offset := int(ciphertext[clen-1])
+		if offset < clen {
+			ciphertext = ciphertext[:clen-offset]
+		}
+	}
+	return ciphertext, nil
+}
+
+func ValidMAC(message, messageMAC, key []byte) bool {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(message)
+	expectedMAC := mac.Sum(nil)
+	return hmac.Equal(messageMAC, expectedMAC)
 }

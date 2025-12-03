@@ -40,10 +40,12 @@ type VWState struct {
 }
 
 type VW struct {
-	cfgdir  string
-	cfg     *VWConfig
-	state   *VWState
-	userKey symmetric_key.SymmetricKey
+	cfgdir        string
+	cfg           *VWConfig
+	state         *VWState
+	userKey       symmetric_key.SymmetricKey
+	asymmetricKey symmetric_key.SymmetricKey
+	allkeys       map[string]symmetric_key.SymmetricKey
 }
 
 // TODO: bring here a proper http client that takes care of the auth using the
@@ -175,22 +177,69 @@ func (vw *VW) DecryptUserKey() error {
 	if err != nil {
 		return err
 	}
+	{
+		encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
+		if err != nil {
+			return err
+		}
 
-	encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
-	if err != nil {
-		return err
+		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(masterkey.Encryption(), masterkey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
+		if err != nil {
+			return err
+		}
+
+		symkey, err := symmetric_key.NewSymmetricKey(key)
+		if err != nil {
+			return err
+		}
+		vw.userKey = symkey
+	}
+	{
+		encsymkey, err := crypto.NewEncStringFrom(vw.state.PrivateKey)
+		if err != nil {
+			return err
+		}
+
+		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(vw.userKey.Encryption(), vw.userKey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
+		if err != nil {
+			return err
+		}
+
+		symkey, err := symmetric_key.NewSymmetricKey(key)
+		if err != nil {
+			return err
+		}
+		vw.asymmetricKey = symkey
 	}
 
-	key, err := symmetric_key.AES_CBC_256_decrypt(masterkey, encsymkey.IV(), encsymkey.Data())
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	symkey, err := symmetric_key.NewSymmetricKey(key)
-	if err != nil {
-		return err
+func (vw *VW) DecryptOrganizationKeys() error {
+	if vw.allkeys == nil {
+		vw.allkeys = make(map[string]symmetric_key.SymmetricKey)
 	}
-	vw.userKey = symkey
+	vw.allkeys[""] = vw.userKey
+
+	for _, orgObj := range vw.state.LatestSync.Profile.Organizations {
+		encsymkey, err := crypto.NewEncStringFrom(orgObj.Key)
+		if err != nil {
+			return err
+		}
+
+		key, err := symmetric_key.RSA_2048_OAEP_SHA_1_decrypt(vw.asymmetricKey.Encryption(), encsymkey.Data())
+		if err != nil {
+			return err
+		}
+
+		symkey, err := symmetric_key.NewSymmetricKey(key)
+		if err != nil {
+			return err
+		}
+
+		vw.allkeys[orgObj.Id] = symkey
+
+	}
 	return nil
 }
 
@@ -217,6 +266,10 @@ func main() {
 		log.Fatalf("error-decrypt: %s", err)
 	}
 
+	if err := vw.DecryptOrganizationKeys(); err != nil {
+		log.Fatalf("error-org-decrypt: %s", err)
+	}
+
 	folders := make(map[string]string)
 	{
 		// Folder cache
@@ -229,17 +282,23 @@ func main() {
 
 	// List all secrets
 	{
-		fmt.Printf("%s,%s,%s\n", "ID", "Folder", "Name", "Password")
+		fmt.Printf("%s,%s,%s,%s\n", "ID", "Folder", "Name", "Password")
 		for _, cipherObj := range vw.state.LatestSync.Ciphers {
-			if cipherObj.OrganizationId != "" {
+			key, ok := vw.allkeys[cipherObj.OrganizationId]
+			if !ok {
+				fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], "TODO:no key known ", "~")
 				continue
 			}
-			cipher := utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Name))))
+			cipher, err := key.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Name)))
+			if err != nil {
+				fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], "TODO:cannot decrypt this yet", "~")
+				continue
+			}
 
-			pw := ""
+			pw := "-not-yet-"
 
 			if pwR := cipherObj.Login.Password; pwR != "" {
-				// pw = utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Login.Password))))
+				pw = utils.Must2(key.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Login.Password))))
 			}
 
 			fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipher, pw)

@@ -31,7 +31,7 @@ func (sk *symmetricKey) Type() crypto.EncryptionType {
 func (sk *symmetricKey) Decrypt(encstr crypto.EncString) ([]byte, error) {
 	switch encstr.Type() {
 	case crypto.ENC_TYPE_AES_CBC_256_HMAC_SHA_256_B64:
-		return AES_CBC_256_decrypt(sk.Encryption(), encstr.IV(), encstr.Data())
+		return AES_CBC_256_HMAC_decrypt(sk.Encryption(), sk.Authentication(), encstr.IV(), encstr.Data(), encstr.MAC())
 		// case crypto.ENC_TYPE_RSA2048_OAEP_SHA_1_B64:
 		// 	return RSA_2048_OAEP_SHA_1_decrypt(sk.Encryption(), encstr.Data())
 	}
@@ -45,7 +45,14 @@ func (sk *symmetricKey) DecryptString(encstr crypto.EncString) (string, error) {
 }
 
 func NewSymmetricKey(buf []byte) (SymmetricKey, error) {
-	switch len(buf) {
+	l := len(buf)
+	switch l {
+	case 32:
+		return &symmetricKey{
+			keytype:        crypto.ENC_TYPE_AES_CBC_256_B64,
+			encryption:     buf[0:32],
+			authentication: nil,
+		}, nil
 	case 64:
 		return &symmetricKey{
 			keytype:        crypto.ENC_TYPE_AES_CBC_256_HMAC_SHA_256_B64,
@@ -53,6 +60,11 @@ func NewSymmetricKey(buf []byte) (SymmetricKey, error) {
 			authentication: buf[32:64],
 		}, nil
 	default:
-		return nil, fmt.Errorf("Unknown symmetric key type")
+		// TODO: make this parametrizable from consumer
+		return &symmetricKey{
+			keytype:    crypto.ENC_TYPE_RSA2048_OAEP_SHA_1_B64,
+			encryption: buf,
+		}, nil
+		// return nil, fmt.Errorf("Unknown symmetric key type with length=%d", l)
 	}
 }

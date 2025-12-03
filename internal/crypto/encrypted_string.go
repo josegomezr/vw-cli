@@ -9,6 +9,7 @@ import (
 type EncString interface {
 	Data() []byte
 	IV() []byte
+	MAC() []byte
 	Type() EncryptionType
 	String() string
 }
@@ -16,6 +17,7 @@ type EncString interface {
 type EncryptedString struct {
 	data    []byte
 	iv      []byte
+	mac     []byte
 	enctype EncryptionType
 }
 
@@ -31,6 +33,11 @@ func (es *EncryptedString) String() string {
 func (es *EncryptedString) IV() []byte {
 	return es.iv
 }
+
+func (es *EncryptedString) MAC() []byte {
+	return es.mac
+}
+
 func (es *EncryptedString) Type() EncryptionType {
 	return es.enctype
 }
@@ -57,10 +64,11 @@ func (a *EncryptedString) UnmarshalJSON(b []byte) error {
 
 }
 
-func NewEncString(data, iv []byte, enctype EncryptionType) EncString {
+func NewEncString(data, iv, mac []byte, enctype EncryptionType) EncString {
 	return &EncryptedString{
 		data:    data,
 		iv:      iv,
+		mac:     mac,
 		enctype: enctype,
 	}
 }
@@ -128,15 +136,17 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 	case ENC_TYPE_AES_CBC_256_HMAC_SHA_256_B64:
 		iv := MustB64d(keypieces[0])
 		data := MustB64d(keypieces[1])
-		return NewEncString(data, iv, encType), nil
+		mac := MustB64d(keypieces[2])
+		return NewEncString(data, iv, mac, encType), nil
 
 		// mac := keypieces[2]
 		// parse_AES_CBC_256_HMAC_SHA_256_B64(iv, data, mac)
 	// case ENC_TYPE_RSA2048_OAEP_SHA_256_B64:
 	//   fallthrough
 	case ENC_TYPE_RSA2048_OAEP_SHA_1_B64:
+
 		data := MustB64d(keypieces[0])
-		return NewEncString(data, nil, encType), nil
+		return NewEncString(data, nil, nil, encType), nil
 	// case ENC_TYPE_STR_RSA2048_OAEP_SHA_256_HMAC_SHA_256_B64:
 	//   fallthrough
 	// case ENC_TYPE_STR_RSA2048_OAEP_SHA_1_HMAC_SHA_256_B64:

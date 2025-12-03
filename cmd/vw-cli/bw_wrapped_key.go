@@ -4,6 +4,7 @@ import (
 	"crypto/hkdf"
 	"crypto/pbkdf2"
 	"crypto/sha256"
+	"github.com/josegomezr/vw-cli/internal/symmetric_key"
 )
 
 // TODO: split this into separate files & packages
@@ -16,11 +17,24 @@ const (
 	KDF_Type_Argon2id              = 1
 )
 
-func deriveDecryptionKeyFromEmailPassword(email, password string) ([]byte, error) {
+func deriveDecryptionKeyFromEmailPassword(email, password string) (symmetric_key.SymmetricKey, error) {
 	// TODO: prolly make it accept the master key instead of the email/pw pair
-	payload, _ := deriveMasterKeyFromEmailPassword(email, password)
-	enc, _ := hkdf.Expand(sha256.New, payload, "enc", 32)
-	return enc, nil
+	payload, err := deriveMasterKeyFromEmailPassword(email, password)
+	if err != nil {
+		return nil, err
+	}
+	enc, err := hkdf.Expand(sha256.New, payload, "enc", 32)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := hkdf.Expand(sha256.New, payload, "mac", 32)
+	if err != nil {
+		return nil, err
+	}
+	ret := []byte{}
+	ret = append(ret, enc...)
+	ret = append(ret, auth...)
+	return symmetric_key.NewSymmetricKey(ret)
 }
 
 func deriveMasterKeyFromEmailPassword(email, password string) ([]byte, error) {
