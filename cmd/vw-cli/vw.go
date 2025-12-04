@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"time"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"io"
-	"encoding/json"
+	"time"
 
 	"github.com/josegomezr/vw-cli/internal/api"
 	"github.com/josegomezr/vw-cli/internal/crypto"
@@ -168,6 +168,10 @@ func (vw *VW) LoadState() error {
 }
 
 func (vw *VW) DecryptUserKey() error {
+	if vw == nil {
+		return fmt.Errorf("not initialized")
+	}
+
 	masterkey, err := deriveDecryptionKeyFromEmailPassword(
 		vw.state.LatestSync.Profile.Email,
 		vw.cfg.Password,
@@ -214,6 +218,10 @@ func (vw *VW) DecryptUserKey() error {
 }
 
 func (vw *VW) DecryptOrganizationKeys() error {
+	if vw == nil || vw.userKey == nil {
+		return fmt.Errorf("not initialized")
+	}
+
 	if vw.allkeys == nil {
 		vw.allkeys = make(map[string]symmetric_key.SymmetricKey)
 	}

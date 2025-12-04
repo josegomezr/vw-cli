@@ -5,20 +5,20 @@ import (
 )
 
 type LoginObject struct {
-	Password             string `json:"password"`
+	Password             string `json:"password" encryptedString:"true"`
 	PasswordRevisionDate string `json:"passwordRevisionDate"`
-	Totp                 string `json:"totp"`
-	Uri                  string `json:"uri"`
-	Username             string `json:"username"`
+	Totp                 string `json:"totp" encryptedString:"true"`
+	Uri                  string `json:"uri" encryptedString:"true"`
+	Username             string `json:"username" encryptedString:"true"`
 }
 
 type CipherObject struct {
 	Id             string      `json:"id"`
 	FolderId       string      `json:"folderId"`
-	Name           string      `json:"name"`
+	Name           string      `json:"name" encryptedString:"true"`
 	Object         string      `json:"object"`
 	OrganizationId string      `json:"organizationId"`
-	Notes          string      `json:"notes"`
+	Notes          string      `json:"notes" encryptedString:"true"`
 	Login          LoginObject `json:"login"`
 }
 
