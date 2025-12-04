@@ -35,10 +35,7 @@ func AES_CBC_256_decrypt(key, iv, data []byte) ([]byte, error) {
 }
 
 func AES_CBC_256_HMAC_decrypt(key, hmacKey, iv, data, mac []byte) ([]byte, error) {
-	macmsg := []byte{}
-	macmsg = append(macmsg, iv...)
-	macmsg = append(macmsg, data...)
-	if !ValidMAC(macmsg, mac, hmacKey) {
+	if !validMAC(iv, data, mac, hmacKey) {
 		return nil, fmt.Errorf("Invalid HMAC")
 	}
 
@@ -63,9 +60,10 @@ func AES_CBC_256_HMAC_decrypt(key, hmacKey, iv, data, mac []byte) ([]byte, error
 	return ciphertext, nil
 }
 
-func ValidMAC(message, messageMAC, key []byte) bool {
+func validMAC(iv, data, messageMAC, key []byte) bool {
 	mac := hmac.New(sha256.New, key)
-	mac.Write(message)
+	mac.Write(iv)
+	mac.Write(data)
 	expectedMAC := mac.Sum(nil)
 	return hmac.Equal(messageMAC, expectedMAC)
 }
