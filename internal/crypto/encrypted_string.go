@@ -112,14 +112,14 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 		// case ENC_TYPE_STR_COSE_ENCRYPT_0:
 		// 	encType = ENC_TYPE_COSE_ENCRYPT_0
 		default:
-			return nil, fmt.Errorf("Unknown key type: %s", ktype)
+			return nil, fmt.Errorf("Unknown key type: %v", ktype)
 		}
 	}
 
 	expectedKeyParts, ok := EXPECTED_NUM_PARTS_BY_ENCRYPTION_TYPE[encType]
 
 	if !ok {
-		return nil, fmt.Errorf("Unknown key fragments expectation: %s", encType)
+		return nil, fmt.Errorf("Unknown key fragments expectation: %v", encType)
 	}
 
 	keypieces := strings.Split(keycontent, "|")
@@ -153,7 +153,7 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 	//   data := keypieces[0]
 	//   mac := keypieces[1]
 	default:
-		return nil, fmt.Errorf("I don't know how to handle: %s keys", encType)
+		return nil, fmt.Errorf("I don't know how to handle: %v keys", encType)
 	}
 
 	return &EncryptedString{}, nil

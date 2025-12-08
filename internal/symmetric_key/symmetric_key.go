@@ -36,7 +36,7 @@ func (sk *symmetricKey) Decrypt(encstr crypto.EncString) ([]byte, error) {
 		// 	return RSA_2048_OAEP_SHA_1_decrypt(sk.Encryption(), encstr.Data())
 	}
 
-	return nil, fmt.Errorf("Don't know how to handle %s text", encstr.Type())
+	return nil, fmt.Errorf("Don't know how to handle %v text", encstr.Type())
 }
 
 func (sk *symmetricKey) DecryptString(encstr crypto.EncString) (string, error) {
