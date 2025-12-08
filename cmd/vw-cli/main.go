@@ -12,12 +12,6 @@ import (
 	"reflect"
 )
 
-type CLIOpts struct {
-	ConfigDir      string
-	Password       string
-	MasterPassword string
-}
-
 var GLOBAL_VW *VW
 
 func init() {
