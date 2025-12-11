@@ -17,4 +17,5 @@ const (
 	// // Cose is the encoding for the key used but contained can be:
 	// // - XChaCha20Poly1305
 	// ENC_TYPE_STR_COSE_ENCRYPT_0 = "7"
+	ENC_TYPE_STR_AES_GCM_256_B64 = "700"
 )

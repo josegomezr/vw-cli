@@ -5,7 +5,7 @@ import (
 )
 
 func MustB64d(b string) []byte {
-	decoded, err := base64.StdEncoding.DecodeString(b)
+	decoded, err := B64d(b)
 	if err != nil {
 		panic(err)
 	}

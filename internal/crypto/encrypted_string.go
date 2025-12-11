@@ -26,7 +26,7 @@ func (es *EncryptedString) Data() []byte {
 }
 
 func (es *EncryptedString) String() string {
-	b := B64e(es.iv) + "|" + B64e(es.data)
+	b := fmt.Sprintf("%d", es.enctype) + "." + B64e(es.iv) + "|" + B64e(es.data)
 	return b
 }
 
@@ -103,6 +103,9 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 		case ENC_TYPE_STR_RSA2048_OAEP_SHA_1_B64:
 			encType = ENC_TYPE_RSA2048_OAEP_SHA_1_B64
 
+		case ENC_TYPE_STR_AES_GCM_256_B64:
+			encType = ENC_TYPE_AES_GCM_256_B64
+
 		// case ENC_TYPE_STR_RSA2048_OAEP_SHA_256_HMAC_SHA_256_B64:
 		// 	encType = ENC_TYPE_RSA2048_OAEP_SHA_256_HMAC_SHA_256_B64
 
@@ -134,9 +137,18 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 	//   iv = keypieces[0]
 	//   data = keypieces[1]
 	case ENC_TYPE_AES_CBC_256_HMAC_SHA_256_B64:
-		iv := MustB64d(keypieces[0])
-		data := MustB64d(keypieces[1])
-		mac := MustB64d(keypieces[2])
+		iv, err := B64d(keypieces[0])
+		if err != nil {
+			return nil, err
+		}
+		data, err := B64d(keypieces[1])
+		if err != nil {
+			return nil, err
+		}
+		mac, err := B64d(keypieces[2])
+		if err != nil {
+			return nil, err
+		}
 		return NewEncString(data, iv, mac, encType), nil
 
 		// mac := keypieces[2]
@@ -145,13 +157,26 @@ func NewEncStringFrom(rawkeycontent string) (EncString, error) {
 	//   fallthrough
 	case ENC_TYPE_RSA2048_OAEP_SHA_1_B64:
 
-		data := MustB64d(keypieces[0])
+		data, err := B64d(keypieces[0])
+		if err != nil {
+			return nil, err
+		}
 		return NewEncString(data, nil, nil, encType), nil
 	// case ENC_TYPE_STR_RSA2048_OAEP_SHA_256_HMAC_SHA_256_B64:
 	//   fallthrough
 	// case ENC_TYPE_STR_RSA2048_OAEP_SHA_1_HMAC_SHA_256_B64:
 	//   data := keypieces[0]
 	//   mac := keypieces[1]
+	case ENC_TYPE_AES_GCM_256_B64:
+		iv, err := B64d(keypieces[0])
+		if err != nil {
+			return nil, err
+		}
+		data, err := B64d(keypieces[1])
+		if err != nil {
+			return nil, err
+		}
+		return NewEncString(data, iv, nil, encType), nil
 	default:
 		return nil, fmt.Errorf("I don't know how to handle: %v keys", encType)
 	}

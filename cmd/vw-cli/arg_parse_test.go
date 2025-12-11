@@ -138,7 +138,6 @@ func TestArgParseShow(t *testing.T) {
 	})
 }
 
-
 func TestArgParseList(t *testing.T) {
 	vwcli.FlagMode = flag.ContinueOnError
 	t.Run("When using the shortcut: ls", func(t *testing.T) {

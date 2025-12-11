@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"github.com/josegomezr/vw-cli/internal/crypto"
@@ -10,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 )
 
 var GLOBAL_VW *VW
@@ -19,6 +22,136 @@ func init() {
 }
 
 func main() {
+	opts, err := ParseArgs(os.Args[1:])
+	if err != nil {
+		log.Fatalf("Error parsing args")
+	}
+	GLOBAL_VW.cfgdir = opts.ConfigDir
+	GLOBAL_VW.LoadConfig()
+	GLOBAL_VW.LoadState()
+
+	switch opts.Command {
+	case "help":
+		return
+	case "unlock":
+		session := os.Getenv("VW_SESSION")
+		buf, err := crypto.B64d(session)
+		if err != nil {
+			if opts.UnlockOpts.Check {
+				fmt.Printf("Locked (no session)...")
+				return
+			}
+		}
+
+		simkey, err := symmetric_key.New_AES_256_GCM_Key(buf)
+		if err != nil {
+			if opts.UnlockOpts.Check {
+				fmt.Printf("Locked (no key was created)...")
+				return
+			}
+			fmt.Printf("this would never happen in reality: %q\n", err)
+			buf = make([]byte, 32)
+			rand.Read(buf)
+			simkey, _ = symmetric_key.New_AES_256_GCM_Key(buf)
+		} else {
+			encstr, err := crypto.NewEncStringFrom(GLOBAL_VW.state.SessionMasterPw)
+			if err != nil {
+				if opts.UnlockOpts.Check {
+					fmt.Printf("Locked (cannot read encrypted string)...")
+					return
+				}
+				fmt.Printf("could not build enc string: %s", err)
+			} else {
+				keybuf, err := simkey.Decrypt(encstr)
+				if err != nil {
+					if opts.UnlockOpts.Check {
+						fmt.Printf("Locked (cannot decrypt encrypted string)...")
+						return
+					}
+				}
+
+				userKey, err := symmetric_key.NewSymmetricKey(keybuf)
+				if err != nil {
+					if opts.UnlockOpts.Check {
+						fmt.Printf("Locked (cannot decrypt encrypted string)...")
+						return
+					}
+				} else {
+					GLOBAL_VW.userKey = userKey
+				}
+
+				if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err == nil {
+					fmt.Println("key works!")
+					return
+				} else {
+					if opts.UnlockOpts.Check {
+						fmt.Printf("Locked (cannot decrypt asymmetric key)...")
+						return
+					}
+				}
+			}
+		}
+
+		fmt.Println("nope, ask for the master pw")
+		var text string
+		{
+			disableecho()
+			defer enableecho()
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("Enter master password: ")
+			text, _ = reader.ReadString('\n')
+			text = strings.TrimSpace(text)
+			fmt.Println()
+
+		}
+
+		if err := GLOBAL_VW.DecryptUserKeynew(text); err != nil {
+			fmt.Println("Could not decrypt master key")
+			return
+		}
+
+		keybuf := []byte{}
+		keybuf = append(keybuf, GLOBAL_VW.userKey.Encryption()...)
+		if GLOBAL_VW.userKey.Authentication() != nil {
+			keybuf = append(keybuf, GLOBAL_VW.userKey.Authentication()...)
+		}
+
+		localencryptedkeydata, err := simkey.Encrypt(keybuf, crypto.ENC_TYPE_AES_GCM_256_B64)
+		if err != nil {
+			fmt.Println("nope, cannot encrypt local master key with session key")
+			return
+		}
+		GLOBAL_VW.state.SessionMasterPw = localencryptedkeydata.String()
+		if err := GLOBAL_VW.SaveState(); err != nil {
+			fmt.Println("damn it, what now?", err)
+			return
+		}
+		fmt.Println("Finally!!!")
+		fmt.Println("Session key: ", crypto.B64e(buf))
+		return
+
+	case "login":
+		if GLOBAL_VW.state.Email == "" {
+			fmt.Printf("TODO: Call the procedure here")
+			fmt.Printf("Login via")
+			if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
+				fmt.Println("API")
+			} else if opts.LoginOpts.Email != "" {
+				fmt.Println("Email+Master password")
+			}
+
+			fmt.Println("Against:", opts.LoginOpts.BitwardenURL)
+		} else {
+			fmt.Println("Logged in as:", GLOBAL_VW.state.Email)
+		}
+	default:
+		fmt.Printf("Unhandled command: %s\n", opts.Command)
+		os.Exit(1)
+	}
+	_ = opts
+}
+
+func main3() {
 	cfgdir := "./state-files/"
 
 	GLOBAL_VW.cfgdir = cfgdir

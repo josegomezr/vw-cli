@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/user"
+	"path/filepath"
 )
 
 type CLIShowOpts struct {
@@ -18,35 +20,83 @@ type CLIListOpts struct {
 }
 
 type CLILoginOpts struct {
-	APIKey         string
-	Email          string
+	ApiClientId     string
+	ApiClientSecret string
+	Email           string
+	BitwardenURL    string
+	MasterPassword  string
+}
+
+type CLIUnlockOpts struct {
+	Check          bool
 	MasterPassword string
 }
 
 type CLIOpts struct {
 	ConfigDir string
-	Password  string
 	Command   string
 
-	LoginOpts CLILoginOpts
-	ShowOpts  CLIShowOpts
-	ListOpts  CLIListOpts
+	LoginOpts  CLILoginOpts
+	ShowOpts   CLIShowOpts
+	ListOpts   CLIListOpts
+	UnlockOpts CLIUnlockOpts
 }
 
 var FlagMode = flag.ExitOnError
 
-func parseLoginArgs(cliopts *CLIOpts, args []string) (err error) {
-	masterPasswordFile := ""
+var loginFlagset *flag.FlagSet
+var globalflagset *flag.FlagSet
+var listFlagSet *flag.FlagSet
+var showFlagSet *flag.FlagSet
+var unlockFlagSet *flag.FlagSet
 
-	loginFlagset := flag.NewFlagSet("vw-cli login", FlagMode)
-	loginFlagset.StringVar(&cliopts.LoginOpts.APIKey, "api-key", "", "api key")
-	loginFlagset.StringVar(&cliopts.LoginOpts.Email, "email", "", "email")
+func init() {
+	globalflagset = flag.NewFlagSet("vw-cli", FlagMode)
+	loginFlagset = flag.NewFlagSet("vw-cli login", FlagMode)
+	listFlagSet = flag.NewFlagSet("vw-cli list", FlagMode)
+	showFlagSet = flag.NewFlagSet("vw-cli show", FlagMode)
+	unlockFlagSet = flag.NewFlagSet("vw-cli unlock", FlagMode)
+}
+
+func parseUnlockArgs(cliopts *CLIOpts, args []string) (err error) {
+	masterPasswordFile := ""
+	loginFlagset.BoolVar(&cliopts.UnlockOpts.Check, "check", false, "check unlock status")
 	loginFlagset.StringVar(&masterPasswordFile, "master-password-file", "", "master-password-file")
 
 	err = loginFlagset.Parse(args)
 
 	if err != nil {
 		if err == flag.ErrHelp {
+			loginFlagset.Usage()
+			err = nil
+			return
+		}
+	}
+
+	if masterPasswordFile != "" {
+		content, readError := os.ReadFile(masterPasswordFile)
+		if readError != nil {
+			err = readError
+			return
+		}
+		cliopts.UnlockOpts.MasterPassword = string(content)
+	}
+
+	return
+}
+func parseLoginArgs(cliopts *CLIOpts, args []string) (err error) {
+	masterPasswordFile := ""
+	loginFlagset.StringVar(&cliopts.LoginOpts.ApiClientId, "api-client-id", "", "api key")
+	loginFlagset.StringVar(&cliopts.LoginOpts.ApiClientSecret, "api-client-secret", "", "api key")
+	loginFlagset.StringVar(&cliopts.LoginOpts.Email, "email", "", "email")
+	loginFlagset.StringVar(&cliopts.LoginOpts.BitwardenURL, "bitwarden-url", "", "bitwarden-url")
+	loginFlagset.StringVar(&masterPasswordFile, "master-password-file", "", "master-password-file")
+
+	err = loginFlagset.Parse(args)
+
+	if err != nil {
+		if err == flag.ErrHelp {
+			loginFlagset.Usage()
 			err = nil
 			return
 		}
@@ -65,11 +115,10 @@ func parseLoginArgs(cliopts *CLIOpts, args []string) (err error) {
 }
 
 func parseShowArgs(showopts *CLIShowOpts, args []string) (err error) {
-	loginFlagset := flag.NewFlagSet("vw-cli show", FlagMode)
-	loginFlagset.StringVar(&showopts.Folder, "folder", "", "folder id or name")
-	loginFlagset.StringVar(&showopts.Organization, "organization", "", "organization id or name")
+	showFlagSet.StringVar(&showopts.Folder, "folder", "", "folder id or name")
+	showFlagSet.StringVar(&showopts.Organization, "organization", "", "organization id or name")
 
-	err = loginFlagset.Parse(args)
+	err = showFlagSet.Parse(args)
 
 	if err != nil {
 		if err == flag.ErrHelp {
@@ -78,7 +127,7 @@ func parseShowArgs(showopts *CLIShowOpts, args []string) (err error) {
 		}
 	}
 
-	secretName := loginFlagset.Arg(0)
+	secretName := showFlagSet.Arg(0)
 	if secretName == "" {
 		err = fmt.Errorf("Missing first argument: secret id or name")
 	}
@@ -89,14 +138,14 @@ func parseShowArgs(showopts *CLIShowOpts, args []string) (err error) {
 }
 
 func parseListArgs(listopts *CLIListOpts, args []string) (err error) {
-	loginFlagset := flag.NewFlagSet("vw-cli list", FlagMode)
-	loginFlagset.StringVar(&listopts.Folder, "folder", "", "folder id or name")
-	loginFlagset.StringVar(&listopts.Organization, "organization", "", "organization id or name")
+	listFlagSet.StringVar(&listopts.Folder, "folder", "", "folder id or name")
+	listFlagSet.StringVar(&listopts.Organization, "organization", "", "organization id or name")
 
-	err = loginFlagset.Parse(args)
+	err = listFlagSet.Parse(args)
 
 	if err != nil {
 		if err == flag.ErrHelp {
+			listFlagSet.Usage()
 			err = nil
 			return
 		}
@@ -104,17 +153,29 @@ func parseListArgs(listopts *CLIListOpts, args []string) (err error) {
 	return
 }
 
+func homedir() string {
+	user, err := user.Current()
+	if err != nil {
+		panic(err)
+	}
+	return user.HomeDir
+}
+
 func ParseArgs(args []string) (cliopts *CLIOpts, err error) {
 	cliopts = &CLIOpts{}
 
-	globalflagset := flag.NewFlagSet("vw-cli", FlagMode)
 	globalflagset.StringVar(&cliopts.ConfigDir, "config-dir", "", "config dir (defaults to ~/.config/vw-cli/)")
 
 	err = globalflagset.Parse(args)
 
+	if cliopts.ConfigDir == "" {
+		cliopts.ConfigDir = filepath.Join(homedir(), ".config/vw-cli")
+	}
+
 	if err != nil {
 		if err == flag.ErrHelp {
 			err = nil
+			globalflagset.Usage()
 			cliopts.Command = "help"
 			return
 		}
@@ -128,6 +189,7 @@ func ParseArgs(args []string) (cliopts *CLIOpts, err error) {
 	case "":
 		fallthrough
 	case "help":
+		globalflagset.Usage()
 		cliopts.Command = "help"
 		return
 	case "login":
@@ -137,6 +199,14 @@ func ParseArgs(args []string) (cliopts *CLIOpts, err error) {
 			return
 		}
 		cliopts.Command = "login"
+		return
+	case "unlock":
+		err = parseUnlockArgs(cliopts, args[1:])
+		if err != nil {
+			cliopts = nil
+			return
+		}
+		cliopts.Command = "unlock"
 		return
 	case "logout":
 		cliopts.Command = "logout"

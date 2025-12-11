@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/josegomezr/vw-cli/internal/api"
@@ -35,6 +36,8 @@ type VWState struct {
 	PrivateKey          string           `json:"PrivateKey"`
 	ResetMasterPassword bool             `json:"ResetMasterPassword"`
 	LatestSync          api.SyncResponse `json:"latest_sync"`
+	Email               string           `json:"email"`
+	SessionMasterPw     string           `json:"session_master_password"`
 }
 
 type VW struct {
@@ -48,6 +51,133 @@ type VW struct {
 
 // TODO: bring here a proper http client that takes care of the auth using the
 // transport interface.
+
+func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) {
+	uri := "/identity/connect/token"
+	bwUrl := vw.cfg.BitwardenURL + uri
+
+	qs := url.Values{}
+	qs.Set("grant_type", "password")
+	qs.Set("scope", "api offline_access")
+	qs.Set("username", email)
+	qs.Set("password", password)
+	qs.Set("device_identifier", "vw-cli") // TODO: make this a UUID and keep it in the state file
+	qs.Set("device_name", "vw-cli")
+	qs.Set("device_type", "CLI")
+	qs.Set("client_id", "25") // 25 => DeviceType::LinuxCLI. TODO: use a custom id here
+
+	resp, err := http.PostForm(bwUrl, qs)
+
+	if err != nil {
+		return fmt.Errorf("http-error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		io.Copy(os.Stdout, resp.Body)
+		return fmt.Errorf("http-error-not-200")
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(vw.state); err != nil {
+		io.Copy(os.Stdout, resp.Body)
+		return fmt.Errorf("error-decode-state: %w", err)
+	}
+
+	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
+	}
+	syncObj, err := vw.Sync()
+	if err != nil {
+		return fmt.Errorf("sync-state: %w", err)
+	}
+
+	vw.state.LatestSync = *syncObj
+
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
+	}
+	return nil
+}
+
+func (vw *VW) SaveState() (err error) {
+	file, err := os.Create(filepath.Join(vw.cfgdir, "state.file"))
+	if err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
+	}
+	defer file.Close()
+	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
+		return fmt.Errorf("error-flush-state: %w", err)
+	}
+	return
+}
+
+func (vw *VW) LoginWithAPIKeys(clientId, clientSecret string) (err error) {
+	if vw == nil {
+		return fmt.Errorf("not initialized")
+	}
+
+	if vw.cfg == nil {
+		return fmt.Errorf("not configured")
+	}
+
+	if vw.state != nil {
+		exp := time.Unix(vw.state.ExpiresAtEpoch, 0)
+
+		if time.Now().Before(exp) {
+			return nil
+		}
+	} else {
+		vw.state = &VWState{}
+	}
+
+	uri := "/identity/connect/token"
+	bwUrl := vw.cfg.BitwardenURL + uri
+
+	qs := url.Values{}
+	qs.Set("grant_type", "client_credentials")
+	qs.Set("scope", "api")
+	qs.Set("device_identifier", "vw-cli")
+	qs.Set("device_name", "vw-cli name")
+	qs.Set("device_type", "CLI")
+	qs.Set("client_id", clientId)
+	qs.Set("client_secret", clientSecret)
+
+	resp, err := http.PostForm(bwUrl, qs)
+
+	if err != nil {
+		return fmt.Errorf("http-error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		io.Copy(os.Stdout, resp.Body)
+		return fmt.Errorf("http-error-not-200")
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(vw.state); err != nil {
+		io.Copy(os.Stdout, resp.Body)
+		return fmt.Errorf("error-decode-state: %w", err)
+	}
+
+	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
+	}
+
+	syncObj, err := vw.Sync()
+	if err != nil {
+		return fmt.Errorf("sync-state: %w", err)
+	}
+
+	vw.state.LatestSync = *syncObj
+
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
+	}
+
+	return nil
+}
 
 func (vw *VW) Login() (err error) {
 	if vw == nil {
@@ -96,16 +226,10 @@ func (vw *VW) Login() (err error) {
 		io.Copy(os.Stdout, resp.Body)
 		return fmt.Errorf("error-decode-state: %w", err)
 	}
-
-	// TODO: Extract this into SaveState()
-	file, err := os.Create(vw.cfgdir + "state.file")
-	if err != nil {
-		return fmt.Errorf("error-state-file: %w", err)
-	}
-	defer file.Close()
 	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
-	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
-		return fmt.Errorf("error-flush-state: %w", err)
+
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
 	}
 
 	syncObj, err := vw.Sync()
@@ -115,11 +239,9 @@ func (vw *VW) Login() (err error) {
 
 	vw.state.LatestSync = *syncObj
 
-	file.Seek(0, 0)
-	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
-		return fmt.Errorf("error-flush-state: %w", err)
+	if err := vw.SaveState(); err != nil {
+		return fmt.Errorf("error-state-file: %w", err)
 	}
-
 	return nil
 }
 
@@ -128,7 +250,7 @@ func (vw *VW) LoadConfig() error {
 		return fmt.Errorf("not initialized")
 	}
 
-	file, err := os.Open(vw.cfgdir + "config.config")
+	file, err := os.Open(filepath.Join(vw.cfgdir, "config.config"))
 	if err != nil {
 		return fmt.Errorf("error-open-config-file: %w", err)
 	}
@@ -148,7 +270,7 @@ func (vw *VW) LoadState() error {
 	state := &VWState{}
 	vw.state = state
 
-	file, err := os.Open(vw.cfgdir + "state.file")
+	file, err := os.Open(filepath.Join(vw.cfgdir, "state.file"))
 	if err != nil {
 		if err == io.EOF || os.IsNotExist(err) {
 			return nil
@@ -167,18 +289,79 @@ func (vw *VW) LoadState() error {
 	return nil
 }
 
-func (vw *VW) DecryptUserKey() error {
+func (vw *VW) DecryptUserKeynew(masterpassword string) error {
 	if vw == nil {
 		return fmt.Errorf("not initialized")
 	}
 
 	masterkey, err := deriveDecryptionKeyFromEmailPassword(
-		vw.state.LatestSync.Profile.Email,
+		vw.state.Email,
+		masterpassword,
+	)
+	if err != nil {
+		return err
+	}
+
+	{
+		encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
+		if err != nil {
+			return err
+		}
+
+		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(masterkey.Encryption(), masterkey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
+		if err != nil {
+			return err
+		}
+
+		symkey, err := symmetric_key.NewSymmetricKey(key)
+		if err != nil {
+			return err
+		}
+		vw.userKey = symkey
+	}
+
+	return nil
+}
+
+func (vw *VW) DecryptUserAsymmetricKey() error {
+	if vw.userKey == nil {
+		return fmt.Errorf("no user key available")
+	}
+
+	encsymkey, err := crypto.NewEncStringFrom(vw.state.PrivateKey)
+	if err != nil {
+		return err
+	}
+
+	key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(vw.userKey.Encryption(), vw.userKey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
+	if err != nil {
+		return err
+	}
+
+	symkey, err := symmetric_key.NewSymmetricKey(key)
+	if err != nil {
+		return err
+	}
+	vw.asymmetricKey = symkey
+	return nil
+}
+
+func (vw *VW) DecryptUserKey() error {
+	if vw == nil {
+		return fmt.Errorf("not initialized")
+	}
+	if vw.userKey != nil {
+		return nil
+	}
+
+	masterkey, err := deriveDecryptionKeyFromEmailPassword(
+		vw.state.Email,
 		vw.cfg.Password,
 	)
 	if err != nil {
 		return err
 	}
+
 	{
 		encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
 		if err != nil {

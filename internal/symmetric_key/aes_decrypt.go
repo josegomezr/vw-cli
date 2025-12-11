@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 )
@@ -66,4 +67,41 @@ func validMAC(iv, data, messageMAC, key []byte) bool {
 	mac.Write(data)
 	expectedMAC := mac.Sum(nil)
 	return hmac.Equal(messageMAC, expectedMAC)
+}
+
+func AES_GCM_256_encrypt(key, iv, data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("Cipher error: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext := gcm.Seal(nil, iv, data, nil)
+
+	return ciphertext, nil
+}
+
+func AES_GCM_256_decrypt(key, iv, data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("Cipher error: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext, err := gcm.Open(nil, iv, data, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return ciphertext, nil
+}
+
+func RandomIV() []byte {
+	iv := make([]byte, 12)
+	rand.Read(iv)
+	return iv
 }
