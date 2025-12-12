@@ -93,9 +93,9 @@ func parseLoginArgs(cliopts *CLIOpts, args []string) (err error) {
 	masterPasswordFile := ""
 	loginFlagset.StringVar(&cliopts.LoginOpts.ApiClientId, "api-client-id", "", "api key")
 	loginFlagset.StringVar(&cliopts.LoginOpts.ApiClientSecret, "api-client-secret", "", "api key")
-	loginFlagset.StringVar(&cliopts.LoginOpts.Email, "email", "", "email")
+	// loginFlagset.StringVar(&cliopts.LoginOpts.Email, "email", "", "email")
 	loginFlagset.StringVar(&cliopts.LoginOpts.BitwardenURL, "bitwarden-url", "", "bitwarden-url")
-	loginFlagset.StringVar(&masterPasswordFile, "master-password-file", "", "master-password-file")
+	// loginFlagset.StringVar(&masterPasswordFile, "master-password-file", "", "master-password-file")
 
 	err = loginFlagset.Parse(args)
 
