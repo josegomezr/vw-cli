@@ -8,7 +8,7 @@ CLI Interface
 ---
 ```bash
 vw-cli help
-vw-cli [--session-token ...] [--config-dir "/custom/config-dir"] login [--api-client-id "key"] [--api-client-secret "secret"]
+vw-cli [--session-token ...] [--config-dir "/custom/config-dir"] login [--api-client-id "key"] [--api-client-secret "secret"] [--bitwarden-url "url"] [--master-password-file "file"]
 vw-cli [--session-token ...] [--config-dir "/custom/config-dir"] unlock [--check] [-master-password-file]
 vw-cli [--session-token ...] [--config-dir "/custom/config-dir"] list [--folder "folder id or name"] [--organization "organization id or name"]
 vw-cli [--session-token ...] [--config-dir "/custom/config-dir"] show [--folder "folder id or name"] [--organization "organization id or name"] secret-name-or-id
@@ -23,12 +23,11 @@ Authenticates & pulls the password store to your machine. The password store
 remains encrypted and will only be derypted when reading it, never decrypted at
 rest.
 
-As of now only with api credentials. Email/PW will come someday in the future.
-
 ```bash
 vw-cli login --api-client-id user.<uuid from bitwarden>
+# or
+vw-cli login --email <your bitwarden email>
 ```
-
 
 ### 2. Unlock [optional]
 
