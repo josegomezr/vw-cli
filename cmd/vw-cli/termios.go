@@ -67,7 +67,10 @@ func enableecho() {
 	}
 }
 
-func askPass() string {
+func askPass(prompt string) string {
+	if prompt != "" {
+		fmt.Print(prompt)
+	}
 	var text string
 	disableecho()
 	defer enableecho()

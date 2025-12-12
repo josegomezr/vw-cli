@@ -41,5 +41,15 @@ func deriveDecryptionKeyFromEmailPassword(email, password string) (symmetric_key
 func deriveMasterKeyFromEmailPassword(email, password string) ([]byte, error) {
 	salt := []byte(email)
 	payload := password
-	return pbkdf2.Key(sha256.New, string(payload), salt, 600_000, 32)
+	return pbkdf2.Key(sha256.New, payload, salt, 600_000, 32)
+}
+
+func hashEmailPassword(email, password string) ([]byte, error) {
+	key, err := deriveMasterKeyFromEmailPassword(email, password)
+	if err != nil {
+		return nil, err
+	}
+	salt := []byte(password)
+	payload := string(key)
+	return pbkdf2.Key(sha256.New, payload, salt, 1, 32)
 }

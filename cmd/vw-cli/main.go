@@ -12,6 +12,7 @@ import (
 )
 
 var GLOBAL_VW *VW
+
 const DefaultEmptyStringValue = "\x00"
 
 func init() {
@@ -55,13 +56,12 @@ func main() {
 	default:
 		fmt.Printf("Unhandled command: %s\n", opts.Command)
 		os.Exit(1)
-	}	
+	}
 }
 
 func loadkeys(hasDecryptedSessionKey bool) {
 	if !hasDecryptedSessionKey {
-		fmt.Print("Master password: ")
-		masterPassword := askPass()
+		masterPassword := askPass("Master password: ")
 		if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
 			fmt.Println("Could not decrypt master key")
 			os.Exit(1)
@@ -82,13 +82,10 @@ func loadkeys(hasDecryptedSessionKey bool) {
 
 func doLoginCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
 	if GLOBAL_VW.state.Email == "" {
-		fmt.Printf("TODO: Call the procedure here")
-		fmt.Printf("Login via")
 		if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
-			fmt.Println("API")
+			fmt.Println("Log-in with API Credentials")
 			if opts.LoginOpts.ApiClientSecret == "" {
-				fmt.Print("API Secret: ")
-				opts.LoginOpts.ApiClientSecret = askPass()
+				opts.LoginOpts.ApiClientSecret = askPass("API Secret: ")
 			}
 
 			err := GLOBAL_VW.LoginWithAPIKeys(opts.LoginOpts.ApiClientId, opts.LoginOpts.ApiClientSecret)
@@ -99,16 +96,18 @@ func doLoginCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
 			}
 
 			fmt.Println("Logged in!")
-			return
 		} else if opts.LoginOpts.Email != "" {
-			fmt.Println("TODO: this doesn't work yet Email+Master password")
-			fmt.Print("User password: ")
-			err := GLOBAL_VW.LoginWithEmailPassword(opts.LoginOpts.Email, askPass())
+			fmt.Println("Log-in Email+Master password")
+			if opts.LoginOpts.MasterPassword == "" {
+				opts.LoginOpts.MasterPassword = askPass("User password: ")
+			}
+			err := GLOBAL_VW.LoginWithEmailPassword(opts.LoginOpts.Email, opts.LoginOpts.MasterPassword)
 			if err != nil {
 				fmt.Println("error:", err)
 				os.Exit(1)
 				return
 			}
+			fmt.Println("Logged in!")
 		}
 	} else {
 		fmt.Println("Logged in as:", GLOBAL_VW.state.Email)

@@ -60,19 +60,22 @@ func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) 
 	uri := "/identity/connect/token"
 	bwUrl := vw.cfg.BitwardenURL + uri
 
+	khash, err := hashEmailPassword(email, password)
+	if err != nil {
+		return err
+	}
+
 	qs := url.Values{}
 	qs.Set("grant_type", "password")
 	qs.Set("scope", "api offline_access")
 	qs.Set("username", email)
-	qs.Set("password", password)
+	qs.Set("password", crypto.B64e(khash))
 	qs.Set("device_identifier", "vw-cli") // TODO: make this a UUID and keep it in the state file
 	qs.Set("device_name", "vw-cli")
 	qs.Set("device_type", "CLI")
 	qs.Set("client_id", "25") // 25 => DeviceType::LinuxCLI. TODO: use a custom id here
 
-	fmt.Println(qs)
 	resp, err := http.PostForm(bwUrl, qs)
-
 	if err != nil {
 		return fmt.Errorf("http-error: %w", err)
 	}
@@ -455,7 +458,7 @@ func (vw *VW) Sync() (*api.SyncResponse, error) {
 	return api.NewSyncResponseFromReader(resp.Body)
 }
 
-func (vw *VW) SaveSession() (error) {
+func (vw *VW) SaveSession() error {
 	localencryptedkeydata, err := vw.sessionKey.Encrypt(vw.userKey.Buffer(), encryption_type.AES_GCM_256_B64)
 	if err != nil {
 		fmt.Println("nope, cannot encrypt local master key with session key")
