@@ -12,6 +12,9 @@ type CLIShowOpts struct {
 	Folder       string
 	Organization string
 	Cipher       string
+	Attribute    string
+	WithPassword bool
+	WithTotp     bool
 }
 
 type CLIListOpts struct {
@@ -36,10 +39,12 @@ type CLIOpts struct {
 	ConfigDir string
 	Command   string
 
-	LoginOpts  CLILoginOpts
-	ShowOpts   CLIShowOpts
-	ListOpts   CLIListOpts
-	UnlockOpts CLIUnlockOpts
+	LoginOpts    CLILoginOpts
+	ShowOpts     CLIShowOpts
+	ListOpts     CLIListOpts
+	UnlockOpts   CLIUnlockOpts
+	OutputFormat string
+	SessionToken string
 }
 
 var FlagMode = flag.ExitOnError
@@ -115,8 +120,10 @@ func parseLoginArgs(cliopts *CLIOpts, args []string) (err error) {
 }
 
 func parseShowArgs(showopts *CLIShowOpts, args []string) (err error) {
-	showFlagSet.StringVar(&showopts.Folder, "folder", "", "folder id or name")
-	showFlagSet.StringVar(&showopts.Organization, "organization", "", "organization id or name")
+	showFlagSet.StringVar(&showopts.Folder, "folder", "\x00", "folder id or name")
+	showFlagSet.StringVar(&showopts.Organization, "organization", "\x00", "organization id or name")
+	showFlagSet.BoolVar(&showopts.WithPassword, "with-password", false, "reveal password")
+	showFlagSet.BoolVar(&showopts.WithTotp, "with-totp", false, "reveal password")
 
 	err = showFlagSet.Parse(args)
 
@@ -133,13 +140,17 @@ func parseShowArgs(showopts *CLIShowOpts, args []string) (err error) {
 	}
 
 	showopts.Cipher = secretName
+	showopts.Attribute = showFlagSet.Arg(1)
+	if showopts.Attribute == "" {
+		showopts.Attribute = "all"
+	}
 
 	return
 }
 
 func parseListArgs(listopts *CLIListOpts, args []string) (err error) {
-	listFlagSet.StringVar(&listopts.Folder, "folder", "", "folder id or name")
-	listFlagSet.StringVar(&listopts.Organization, "organization", "", "organization id or name")
+	listFlagSet.StringVar(&listopts.Folder, "folder", "\x00", "folder id or name")
+	listFlagSet.StringVar(&listopts.Organization, "organization", "\x00", "organization id or name")
 
 	err = listFlagSet.Parse(args)
 
@@ -165,6 +176,8 @@ func ParseArgs(args []string) (cliopts *CLIOpts, err error) {
 	cliopts = &CLIOpts{}
 
 	globalflagset.StringVar(&cliopts.ConfigDir, "config-dir", "", "config dir (defaults to ~/.config/vw-cli/)")
+	globalflagset.StringVar(&cliopts.OutputFormat, "output-format", "", "output format")
+	globalflagset.StringVar(&cliopts.SessionToken, "session-token", "", "Session Token")
 
 	err = globalflagset.Parse(args)
 
@@ -180,6 +193,18 @@ func ParseArgs(args []string) (cliopts *CLIOpts, err error) {
 			return
 		}
 		cliopts = nil
+		return
+	}
+
+	switch cliopts.OutputFormat {
+	case "":
+		fallthrough
+	case "plain":
+		cliopts.OutputFormat = "plain"
+	case "text":
+		cliopts.OutputFormat = "text"
+	default:
+		err = fmt.Errorf("Unknown format: %s", cliopts.OutputFormat)
 		return
 	}
 

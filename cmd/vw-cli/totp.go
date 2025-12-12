@@ -89,8 +89,6 @@ func totpgen(settings TOTPSettings) (code string, err error) {
 			((int(sum[offset+2]) & 0xff) << 8) |
 			(int(sum[offset+3]) & 0xff))
 
-	fmt.Printf("%+v\n", sum)
-
 	mod := int32(value % int64(math.Pow10(digits)))
 	f := fmt.Sprintf("%%0%dd", digits)
 	code = fmt.Sprintf(f, mod)

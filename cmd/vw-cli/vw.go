@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/josegomezr/vw-cli/internal/api"
 	"github.com/josegomezr/vw-cli/internal/crypto"
+	"github.com/josegomezr/vw-cli/internal/crypto/shortcuts"
+	"github.com/josegomezr/vw-cli/internal/encryption_type"
 	"github.com/josegomezr/vw-cli/internal/symmetric_key"
 )
 
@@ -44,6 +47,7 @@ type VW struct {
 	cfgdir        string
 	cfg           *VWConfig
 	state         *VWState
+	sessionKey    symmetric_key.SymmetricKey
 	userKey       symmetric_key.SymmetricKey
 	asymmetricKey symmetric_key.SymmetricKey
 	allkeys       map[string]symmetric_key.SymmetricKey
@@ -66,6 +70,7 @@ func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) 
 	qs.Set("device_type", "CLI")
 	qs.Set("client_id", "25") // 25 => DeviceType::LinuxCLI. TODO: use a custom id here
 
+	fmt.Println(qs)
 	resp, err := http.PostForm(bwUrl, qs)
 
 	if err != nil {
@@ -171,6 +176,7 @@ func (vw *VW) LoginWithAPIKeys(clientId, clientSecret string) (err error) {
 	}
 
 	vw.state.LatestSync = *syncObj
+	vw.state.Email = vw.state.LatestSync.Profile.Email
 
 	if err := vw.SaveState(); err != nil {
 		return fmt.Errorf("error-state-file: %w", err)
@@ -302,23 +308,11 @@ func (vw *VW) DecryptUserKeynew(masterpassword string) error {
 		return err
 	}
 
-	{
-		encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
-		if err != nil {
-			return err
-		}
-
-		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(masterkey.Encryption(), masterkey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
-		if err != nil {
-			return err
-		}
-
-		symkey, err := symmetric_key.NewSymmetricKey(key)
-		if err != nil {
-			return err
-		}
-		vw.userKey = symkey
+	symkey, err := shortcuts.DecryptSymmetricKey(masterkey, vw.state.Key)
+	if err != nil {
+		return err
 	}
+	vw.userKey = symkey
 
 	return nil
 }
@@ -328,17 +322,7 @@ func (vw *VW) DecryptUserAsymmetricKey() error {
 		return fmt.Errorf("no user key available")
 	}
 
-	encsymkey, err := crypto.NewEncStringFrom(vw.state.PrivateKey)
-	if err != nil {
-		return err
-	}
-
-	key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(vw.userKey.Encryption(), vw.userKey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
-	if err != nil {
-		return err
-	}
-
-	symkey, err := symmetric_key.NewSymmetricKey(key)
+	symkey, err := shortcuts.DecryptSymmetricKey(vw.userKey, vw.state.PrivateKey)
 	if err != nil {
 		return err
 	}
@@ -362,41 +346,53 @@ func (vw *VW) DecryptUserKey() error {
 		return err
 	}
 
-	{
-		encsymkey, err := crypto.NewEncStringFrom(vw.state.Key)
-		if err != nil {
-			return err
-		}
-
-		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(masterkey.Encryption(), masterkey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
-		if err != nil {
-			return err
-		}
-
-		symkey, err := symmetric_key.NewSymmetricKey(key)
-		if err != nil {
-			return err
-		}
-		vw.userKey = symkey
+	symkey, err := shortcuts.DecryptSymmetricKey(masterkey, vw.state.Key)
+	if err != nil {
+		return err
 	}
-	{
-		encsymkey, err := crypto.NewEncStringFrom(vw.state.PrivateKey)
-		if err != nil {
-			return err
-		}
+	vw.userKey = symkey
 
-		key, err := symmetric_key.AES_CBC_256_HMAC_decrypt(vw.userKey.Encryption(), vw.userKey.Authentication(), encsymkey.IV(), encsymkey.Data(), encsymkey.MAC())
-		if err != nil {
-			return err
-		}
+	privKey, err := shortcuts.DecryptSymmetricKey(vw.userKey, vw.state.PrivateKey)
+	if err != nil {
+		return err
+	}
+	vw.asymmetricKey = privKey
 
-		symkey, err := symmetric_key.NewSymmetricKey(key)
+	return nil
+}
+
+func (vw *VW) GenerateSessionKey() symmetric_key.SymmetricKey {
+	buf := make([]byte, 32)
+	rand.Read(buf)
+	k, err := symmetric_key.NewSymmetricKeyCtor(buf, encryption_type.AES_GCM_256_B64)
+	if err != nil {
+		fmt.Println("this should really never fail")
+		panic(err)
+	}
+	return k
+}
+
+func (vw *VW) LoadSessionKey(sessionkey string) error {
+	if sessionkey == "" {
+		simkey := vw.GenerateSessionKey()
+		vw.sessionKey = simkey
+	} else {
+		buf, err := crypto.B64d(sessionkey)
 		if err != nil {
 			return err
 		}
-		vw.asymmetricKey = symkey
+		simkey, err := symmetric_key.NewSymmetricKeyCtor(buf, encryption_type.AES_GCM_256_B64)
+		if err != nil {
+			simkey = vw.GenerateSessionKey()
+		}
+		vw.sessionKey = simkey
 	}
 
+	userKey, err := shortcuts.DecryptSymmetricKey(vw.sessionKey, vw.state.SessionMasterPw)
+	if err != nil {
+		return err
+	}
+	vw.userKey = userKey
 	return nil
 }
 
@@ -411,21 +407,10 @@ func (vw *VW) DecryptOrganizationKeys() error {
 	vw.allkeys[""] = vw.userKey
 
 	for _, orgObj := range vw.state.LatestSync.Profile.Organizations {
-		encsymkey, err := crypto.NewEncStringFrom(orgObj.Key)
+		symkey, err := shortcuts.DecryptSymmetricKeyCtor(vw.asymmetricKey, orgObj.Key, encryption_type.AES_CBC_256_HMAC_SHA_256_B64)
 		if err != nil {
 			return err
 		}
-
-		key, err := symmetric_key.RSA_2048_OAEP_SHA_1_decrypt(vw.asymmetricKey.Encryption(), encsymkey.Data())
-		if err != nil {
-			return err
-		}
-
-		symkey, err := symmetric_key.NewSymmetricKey(key)
-		if err != nil {
-			return err
-		}
-
 		vw.allkeys[orgObj.Id] = symkey
 
 	}

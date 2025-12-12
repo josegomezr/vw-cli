@@ -1,9 +1,5 @@
 package api
 
-import (
-// "github.com/josegomezr/vw-cli/internal/crypto"
-)
-
 type LoginObject struct {
 	Password             string `json:"password" encryptedString:"true"`
 	PasswordRevisionDate string `json:"passwordRevisionDate"`
@@ -33,12 +29,12 @@ type OrganizationObject struct {
 	Id     string `json:"id"`
 	Name   string `json:"name"`
 	Object string `json:"object"`
-	Key    string `json:"key"`
+	Key    string `json:"key" encryptedString:"true"`
 }
 
 type FolderObject struct {
 	Id     string `json:"id"`
-	Name   string `json:"name"`
+	Name   string `json:"name" encryptedString:"true"`
 	Object string `json:"object"`
 }
 

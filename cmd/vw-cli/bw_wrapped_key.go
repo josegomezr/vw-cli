@@ -4,6 +4,7 @@ import (
 	"crypto/hkdf"
 	"crypto/pbkdf2"
 	"crypto/sha256"
+	"github.com/josegomezr/vw-cli/internal/encryption_type"
 	"github.com/josegomezr/vw-cli/internal/symmetric_key"
 )
 
@@ -34,7 +35,7 @@ func deriveDecryptionKeyFromEmailPassword(email, password string) (symmetric_key
 	ret := []byte{}
 	ret = append(ret, enc...)
 	ret = append(ret, auth...)
-	return symmetric_key.NewSymmetricKey(ret)
+	return symmetric_key.NewSymmetricKeyCtor(ret, encryption_type.AES_CBC_256_HMAC_SHA_256_B64)
 }
 
 func deriveMasterKeyFromEmailPassword(email, password string) ([]byte, error) {

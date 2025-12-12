@@ -1,18 +1,15 @@
 package main
 
 import (
-	"bufio"
-	"crypto/rand"
-	"flag"
 	"fmt"
+	"github.com/josegomezr/vw-cli/internal/api"
 	"github.com/josegomezr/vw-cli/internal/crypto"
+	"github.com/josegomezr/vw-cli/internal/crypto/shortcuts"
+	"github.com/josegomezr/vw-cli/internal/encryption_type"
 	"github.com/josegomezr/vw-cli/internal/symmetric_key"
-	"github.com/josegomezr/vw-cli/internal/utils"
 	"log"
 	"net/url"
 	"os"
-	"reflect"
-	"strings"
 )
 
 var GLOBAL_VW *VW
@@ -24,99 +21,54 @@ func init() {
 func main() {
 	opts, err := ParseArgs(os.Args[1:])
 	if err != nil {
-		log.Fatalf("Error parsing args")
+		log.Fatalf("Error parsing args: %s", err)
 	}
 	GLOBAL_VW.cfgdir = opts.ConfigDir
 	GLOBAL_VW.LoadConfig()
 	GLOBAL_VW.LoadState()
 
+	session := opts.SessionToken
+	if env_sess := os.Getenv("VW_SESSION"); env_sess != "" {
+		session = env_sess
+	}
+
+	hasDecryptedSessionKey := false
+	if err := GLOBAL_VW.LoadSessionKey(session); err == nil {
+		hasDecryptedSessionKey = true
+	}
+
 	switch opts.Command {
 	case "help":
 		return
 	case "unlock":
-		session := os.Getenv("VW_SESSION")
-		buf, err := crypto.B64d(session)
-		if err != nil {
-			if opts.UnlockOpts.Check {
-				fmt.Printf("Locked (no session)...")
+		if opts.UnlockOpts.Check {
+			if hasDecryptedSessionKey {
+				fmt.Println("Locked!")
 				return
 			}
+			fmt.Println("Unlocked!")
+			return
 		}
-
-		simkey, err := symmetric_key.New_AES_256_GCM_Key(buf)
-		if err != nil {
-			if opts.UnlockOpts.Check {
-				fmt.Printf("Locked (no key was created)...")
-				return
+		if hasDecryptedSessionKey {
+			switch opts.OutputFormat {
+			case "plain":
+				fmt.Println("Session key: ", crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+			case "text":
+				fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
 			}
-			fmt.Printf("this would never happen in reality: %q\n", err)
-			buf = make([]byte, 32)
-			rand.Read(buf)
-			simkey, _ = symmetric_key.New_AES_256_GCM_Key(buf)
-		} else {
-			encstr, err := crypto.NewEncStringFrom(GLOBAL_VW.state.SessionMasterPw)
-			if err != nil {
-				if opts.UnlockOpts.Check {
-					fmt.Printf("Locked (cannot read encrypted string)...")
-					return
-				}
-				fmt.Printf("could not build enc string: %s", err)
-			} else {
-				keybuf, err := simkey.Decrypt(encstr)
-				if err != nil {
-					if opts.UnlockOpts.Check {
-						fmt.Printf("Locked (cannot decrypt encrypted string)...")
-						return
-					}
-				}
-
-				userKey, err := symmetric_key.NewSymmetricKey(keybuf)
-				if err != nil {
-					if opts.UnlockOpts.Check {
-						fmt.Printf("Locked (cannot decrypt encrypted string)...")
-						return
-					}
-				} else {
-					GLOBAL_VW.userKey = userKey
-				}
-
-				if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err == nil {
-					fmt.Println("key works!")
-					return
-				} else {
-					if opts.UnlockOpts.Check {
-						fmt.Printf("Locked (cannot decrypt asymmetric key)...")
-						return
-					}
-				}
-			}
-		}
-
-		fmt.Println("nope, ask for the master pw")
-		var text string
-		{
-			disableecho()
-			defer enableecho()
-			reader := bufio.NewReader(os.Stdin)
-			fmt.Print("Enter master password: ")
-			text, _ = reader.ReadString('\n')
-			text = strings.TrimSpace(text)
-			fmt.Println()
-
-		}
-
-		if err := GLOBAL_VW.DecryptUserKeynew(text); err != nil {
-			fmt.Println("Could not decrypt master key")
 			return
 		}
 
-		keybuf := []byte{}
-		keybuf = append(keybuf, GLOBAL_VW.userKey.Encryption()...)
-		if GLOBAL_VW.userKey.Authentication() != nil {
-			keybuf = append(keybuf, GLOBAL_VW.userKey.Authentication()...)
+		fmt.Println("Could not load session key, asking for master password...")
+		fmt.Print("Master password: ")
+		masterPassword := askPass()
+		if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
+			fmt.Println("Could not decrypt master key")
+			os.Exit(1)
+			return
 		}
 
-		localencryptedkeydata, err := simkey.Encrypt(keybuf, crypto.ENC_TYPE_AES_GCM_256_B64)
+		localencryptedkeydata, err := GLOBAL_VW.sessionKey.Encrypt(GLOBAL_VW.userKey.Buffer(), encryption_type.AES_GCM_256_B64)
 		if err != nil {
 			fmt.Println("nope, cannot encrypt local master key with session key")
 			return
@@ -124,10 +76,15 @@ func main() {
 		GLOBAL_VW.state.SessionMasterPw = localencryptedkeydata.String()
 		if err := GLOBAL_VW.SaveState(); err != nil {
 			fmt.Println("damn it, what now?", err)
+			os.Exit(1)
 			return
 		}
-		fmt.Println("Finally!!!")
-		fmt.Println("Session key: ", crypto.B64e(buf))
+		switch opts.OutputFormat {
+		case "plain":
+			fmt.Println("Session key:", crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+		case "text":
+			fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+		}
 		return
 
 	case "login":
@@ -136,91 +93,95 @@ func main() {
 			fmt.Printf("Login via")
 			if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
 				fmt.Println("API")
-			} else if opts.LoginOpts.Email != "" {
-				fmt.Println("Email+Master password")
-			}
+				if opts.LoginOpts.ApiClientSecret == "" {
+					fmt.Print("API Secret: ")
+					opts.LoginOpts.ApiClientSecret = askPass()
+				}
 
-			fmt.Println("Against:", opts.LoginOpts.BitwardenURL)
+				err := GLOBAL_VW.LoginWithAPIKeys(opts.LoginOpts.ApiClientId, opts.LoginOpts.ApiClientSecret)
+				if err != nil {
+					fmt.Println("error:", err)
+					os.Exit(1)
+					return
+				}
+
+				fmt.Println("Logged in!")
+				return
+			} else if opts.LoginOpts.Email != "" {
+				fmt.Println("TODO: this doesn't work yet Email+Master password")
+				fmt.Print("User password: ")
+				err := GLOBAL_VW.LoginWithEmailPassword(opts.LoginOpts.Email, askPass())
+				if err != nil {
+					fmt.Println("error:", err)
+					os.Exit(1)
+					return
+				}
+			}
 		} else {
 			fmt.Println("Logged in as:", GLOBAL_VW.state.Email)
 		}
+	case "list":
+		if !hasDecryptedSessionKey {
+			fmt.Println("Could not load session key, asking for master password...")
+			fmt.Print("Master password: ")
+			masterPassword := askPass()
+			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
+				fmt.Println("Could not decrypt master key")
+				os.Exit(1)
+				return
+			}
+		}
+		if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err != nil {
+			fmt.Println("Could not unlock the store (asymmetric key borkd)...")
+			os.Exit(1)
+			return
+		}
+		if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
+			fmt.Println("Could not unlock the store (organization keys key borkd)...")
+			os.Exit(1)
+			return
+		}
+		doList(opts)
+	case "show":
+		if !hasDecryptedSessionKey {
+			fmt.Println("Could not load session key, asking for master password...")
+			fmt.Print("Master password: ")
+			masterPassword := askPass()
+			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
+				fmt.Println("Could not decrypt master key")
+				os.Exit(1)
+				return
+			}
+		}
+		if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err != nil {
+			fmt.Println("Could not unlock the store (asymmetric key borkd)...")
+			os.Exit(1)
+			return
+		}
+		if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
+			fmt.Println("Could not unlock the store (organization keys key borkd)...")
+			os.Exit(1)
+			return
+		}
+		doShow(opts)
 	default:
 		fmt.Printf("Unhandled command: %s\n", opts.Command)
 		os.Exit(1)
-	}
-	_ = opts
+	}	
 }
 
-func main3() {
-	cfgdir := "./state-files/"
-
-	GLOBAL_VW.cfgdir = cfgdir
-
-	if err := GLOBAL_VW.LoadConfig(); err != nil {
-		log.Fatalf("error-load-config: %s", err)
-	}
-
-	if err := GLOBAL_VW.LoadState(); err != nil {
-		log.Fatalf("error-load-state: %s", err)
-	}
-
-	globalflagset := flag.NewFlagSet("vw-cli", flag.ExitOnError)
-	globalflagset.Parse(os.Args[1:])
-	cmd := globalflagset.Arg(0)
-
-	switch cmd {
-	case "":
-		fallthrough
-	case "help":
-		globalflagset.Usage()
-		return
-	case "show":
-		doShow(os.Args[2:])
-		return
-	case "ls":
-		doList(os.Args[2:])
-		return
-	default:
-		log.Printf("Unknown command: %s", cmd)
-		os.Exit(1)
-		return
-	}
-}
-
-func doList(args []string) {
-	defaultFolder := "-no-folder-set-really-im-too-lazy-to-make-this-right-"
-
-	orgIdorName := ""
-	help := false
-	showFlagSet := flag.NewFlagSet("list", flag.ExitOnError)
-	folderPtr := showFlagSet.String("folder", defaultFolder, "folder id or name")
-	showFlagSet.StringVar(folderPtr, "f", defaultFolder, "folder id or name")
-
-	showFlagSet.BoolVar(&help, "h", false, "help")
-	showFlagSet.BoolVar(&help, "help", false, "help")
-	showFlagSet.StringVar(&orgIdorName, "org", "", "folder id or name")
-	showFlagSet.Parse(args)
-
-	if help {
-		showFlagSet.Usage()
-	}
-
-	if err := GLOBAL_VW.DecryptUserKey(); err != nil {
-		log.Fatalf("error-decrypt: %s", err)
-	}
-
-	if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
-		log.Fatalf("error-org-decrypt: %s", err)
-	}
-
+func doList(opts *CLIOpts) {
+	defaultempty := "\x00"
 	orgs := make(map[string]string)
 	folders := make(map[string]string)
 	folders[""] = ""
 
 	for _, folderObj := range GLOBAL_VW.state.LatestSync.Folders {
-		folderName := utils.Must2(GLOBAL_VW.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(folderObj.Name))))
-		folders[folderName] = folderName
-		folders[folderObj.Id] = folderName
+		if err := shortcuts.DecryptStruct(&folderObj, GLOBAL_VW.userKey); err != nil {
+			fmt.Println("TODO: handle this error, folder could not be decrypted")
+		}
+		folders[folderObj.Name] = folderObj.Name
+		folders[folderObj.Id] = folderObj.Name
 	}
 
 	for _, orgObj := range GLOBAL_VW.state.LatestSync.Profile.Organizations {
@@ -232,237 +193,165 @@ func doList(args []string) {
 	for _, cipherObj := range GLOBAL_VW.state.LatestSync.Ciphers {
 		key, ok := GLOBAL_VW.allkeys[cipherObj.OrganizationId]
 		if !ok {
-			log.Printf("Cannot decrypt ciphjer %s, skipping", cipherObj.Id)
+			log.Printf("Unknown organization key for cipher %s, skipping", cipherObj.Id)
+			continue
+		}
+		if err := shortcuts.DecryptStruct(&cipherObj, key); err != nil {
+			fmt.Println("TODO: handle this error, cipher could not be decrypted")
 			continue
 		}
 
-		encryptedAttr := cipherObj.Name
-		decryptedAttr, err := key.DecryptString(utils.Must2(crypto.NewEncStringFrom(encryptedAttr)))
-		if err != nil {
-			fmt.Printf("%s,%s,%s\n", cipherObj.Id, "TODO:cannot decrypt this yet", "~")
-			break
-		}
-
-		if orgIdorName != "" {
+		if opts.ListOpts.Organization != defaultempty {
 			cipherOrg, ok := orgs[cipherObj.OrganizationId]
 			if !ok {
 				continue
 			}
-			if orgIdorName == cipherObj.OrganizationId || orgIdorName == cipherOrg {
-				fmt.Printf("%s %s/%s\n", cipherObj.Id, folders[cipherObj.FolderId], decryptedAttr)
+			if opts.ListOpts.Organization == cipherObj.OrganizationId || opts.ListOpts.Organization == cipherOrg {
+				fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 				continue
 			}
 		}
 
-		if *folderPtr == defaultFolder {
-			fmt.Printf("%s %s/%s\n", cipherObj.Id, folders[cipherObj.FolderId], decryptedAttr)
+		if opts.ListOpts.Folder == defaultempty {
+			fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 		} else {
 			cipherFolder, ok := folders[cipherObj.FolderId]
 			if !ok {
 				continue
 			}
 
-			if *folderPtr == cipherObj.FolderId || *folderPtr == cipherFolder {
-				fmt.Printf("%s %s/%s\n", cipherObj.Id, folders[cipherObj.FolderId], decryptedAttr)
+			if opts.ListOpts.Folder == cipherObj.FolderId || opts.ListOpts.Folder == cipherFolder {
+				fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 			}
 		}
 	}
 }
 
-func doShow(args []string) {
-	showFlagSet := flag.NewFlagSet("list", flag.ExitOnError)
-	revealPw := false
-	revealTotp := false
-	showFlagSet.BoolVar(&revealPw, "with-password", false, "reveal password")
-	showFlagSet.BoolVar(&revealTotp, "with-totp", false, "reveal password")
-	showFlagSet.Parse(args)
+func doShow(opts *CLIOpts) {
+	defaultempty := "\x00"
 
-	id := showFlagSet.Arg(0)
-	attr := showFlagSet.Arg(1)
+	id := opts.ShowOpts.Cipher
+	attr := opts.ShowOpts.Attribute
+	revealTotp := opts.ShowOpts.WithTotp
+	revealPw := opts.ShowOpts.WithPassword
 
-	if id == "" {
-		log.Fatalf("Missing ID")
-	}
+	var foundCipher *api.CipherObject
+	var key symmetric_key.SymmetricKey
 
-	if attr == "" {
-		attr = "all"
-	}
-
-	if err := GLOBAL_VW.DecryptUserKey(); err != nil {
-		log.Fatalf("error-decrypt: %s", err)
-	}
-
-	if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
-		log.Fatalf("error-org-decrypt: %s", err)
+	folders := make(map[string]string)
+	for _, folderObj := range GLOBAL_VW.state.LatestSync.Folders {
+		if err := shortcuts.DecryptStruct(&folderObj, GLOBAL_VW.userKey); err != nil {
+			fmt.Println("TODO: handle this error, folder could not be decrypted")
+		}
+		folders[folderObj.Name] = folderObj.Name
+		folders[folderObj.Id] = folderObj.Name
 	}
 
 	for _, cipherObj := range GLOBAL_VW.state.LatestSync.Ciphers {
-		key, ok := GLOBAL_VW.allkeys[cipherObj.OrganizationId]
+		if wantedOrg := opts.ShowOpts.Organization; wantedOrg != defaultempty {
+			if wantedOrg != cipherObj.OrganizationId {
+				continue
+			}
+		}
+
+		if wantedFolder := opts.ShowOpts.Folder; wantedFolder != defaultempty {
+			_, ok := folders[cipherObj.FolderId]
+
+			if !ok {
+				continue
+			}
+		}
+
+		ckey, ok := GLOBAL_VW.allkeys[cipherObj.OrganizationId]
 		if !ok {
-			log.Printf("Cannot decrypt ciphjer %s, skipping", cipherObj.Id)
+			log.Printf("Cannot decrypt cipher %s, skipping", cipherObj.Id)
 			continue
 		}
 
-		decryptedName, err := key.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Name)))
-		if err != nil {
-			log.Fatalf("err: %s", err)
+		if err := shortcuts.DecryptStruct(&cipherObj, ckey); err != nil {
+			fmt.Println("TODO: handle this error, cipher could not be decrypted")
+			fmt.Printf("%+v\n\n", cipherObj)
+			continue
 		}
+
+		decryptedName := cipherObj.Name
 		if !(id == cipherObj.Id || decryptedName == id) {
 			continue
 		}
 
-		if err := decryptStruct(&cipherObj, key); err != nil {
-			log.Fatalf("error decrypting cipher: %s", err)
+		foundCipher = &cipherObj
+		key = ckey
+		break
+	}
+
+	if foundCipher == nil {
+		log.Fatalf("Could not find cipher %q", id)
+		os.Exit(1)
+	}
+
+	if err := shortcuts.DecryptStruct(&foundCipher.Login, key); err != nil {
+		log.Fatalf("error decrypting cipher login data: %s", err)
+	}
+
+	switch attr {
+	case "name":
+		fmt.Println(foundCipher.Name)
+	case "notes":
+		fmt.Println(foundCipher.Notes)
+	case "login.password":
+		fmt.Println(foundCipher.Login.Password)
+	case "login.username":
+		fmt.Println(foundCipher.Login.Username)
+	case "all":
+		fmt.Println("Id:", foundCipher.Id)
+		if foundCipher.Name != "" {
+			fmt.Println("Name:", foundCipher.Name)
 		}
-		if err := decryptStruct(&cipherObj.Login, key); err != nil {
-			log.Fatalf("error decrypting cipher: %s", err)
+		if foundCipher.Login.Username != "" {
+			fmt.Println("Login-Username:", foundCipher.Login.Username)
 		}
 
-		switch attr {
-		case "name":
-			fmt.Println(cipherObj.Name)
-		case "notes":
-			fmt.Println(cipherObj.Notes)
-		case "login.password":
-			fmt.Println(cipherObj.Login.Password)
-		case "login.username":
-			fmt.Println(cipherObj.Login.Username)
-		case "all":
-			fmt.Println("Id:", cipherObj.Id)
-			if cipherObj.Name != "" {
-				fmt.Println("Name:", cipherObj.Name)
-			}
-			if cipherObj.Login.Username != "" {
-				fmt.Println("Login-Username:", cipherObj.Login.Username)
-			}
+		if foundCipher.Login.Uri != "" {
+			fmt.Println("Login-Uri:", foundCipher.Login.Uri)
+		}
 
-			if cipherObj.Login.Uri != "" {
-				fmt.Println("Login-Uri:", cipherObj.Login.Uri)
-			}
-
-			if revealTotp && cipherObj.Login.Totp != "" {
-				fmt.Println(cipherObj.Login.Totp)
-				url, err := url.Parse(cipherObj.Login.Totp)
+		if revealTotp && foundCipher.Login.Totp != "" {
+			url, err := url.Parse(foundCipher.Login.Totp)
+			if err == nil {
+				totp, err := totpgen(NewTOTPSettingsFromURL(url.Query()))
 				if err == nil {
-					totp, err := totpgen(NewTOTPSettingsFromURL(url.Query()))
-					if err == nil {
-						fmt.Println("Login-Totp:", totp)
-					}
-				} else {
-					log.Fatalf("cannot generate totp")
+					fmt.Println("Login-Totp:", totp)
 				}
+			} else {
+				log.Fatalf("cannot generate totp")
 			}
-
-			if revealPw && cipherObj.Login.Password != "" {
-				fmt.Println("Login-Password:", cipherObj.Login.Password)
-			}
-
-			if cipherObj.Notes != "" {
-				fmt.Println("Notes:", cipherObj.Notes)
-			}
-		case "login.totp":
-			url, err := url.Parse(cipherObj.Login.Totp)
-			if err != nil {
-				log.Fatalf("invalid totp uri: %s", cipherObj.Login.Totp)
-			}
-			totp, err := totpgen(NewTOTPSettingsFromURL(url.Query()))
-			if err != nil {
-				log.Fatalf("invalid totp uri: %s", err)
-			}
-
-			fmt.Println(totp)
-		default:
-			log.Fatalf("unknown field: %s", attr)
-		}
-	}
-}
-
-func decryptStruct(daStruct any, sk symmetric_key.SymmetricKey) error {
-	val := reflect.ValueOf(daStruct).Elem()
-
-	for _, field := range reflect.VisibleFields(val.Type()) {
-		res := field.Tag.Get("encryptedString")
-		if res != "true" {
-			continue
 		}
 
-		structMem := val.FieldByIndex(field.Index)
-		newval := ""
-		if curval := structMem.String(); curval != "" {
-			encstr, err := crypto.NewEncStringFrom(curval)
-			if err != nil {
-				return err
-			}
-			dec, err := sk.DecryptString(encstr)
-			if err != nil {
-				return err
-			}
-			newval = dec
+		if revealPw && foundCipher.Login.Password != "" {
+			fmt.Println("Login-Password:", foundCipher.Login.Password)
 		}
-		structMem.Set(reflect.ValueOf(newval))
-	}
-	return nil
-}
 
-func main2() {
-	cfgdir := "./state-files/"
-
-	vw := &VW{
-		cfgdir: cfgdir,
-	}
-
-	if err := vw.LoadConfig(); err != nil {
-		log.Fatalf("error-load-config: %s", err)
-	}
-
-	if err := vw.LoadState(); err != nil {
-		log.Fatalf("error-load-state: %s", err)
-	}
-
-	if err := vw.Login(); err != nil {
-		log.Fatalf("error-login: %s", err)
-	}
-
-	if err := vw.DecryptUserKey(); err != nil {
-		log.Fatalf("error-decrypt: %s", err)
-	}
-
-	if err := vw.DecryptOrganizationKeys(); err != nil {
-		log.Fatalf("error-org-decrypt: %s", err)
-	}
-
-	folders := make(map[string]string)
-	{
-		// Folder cache
-		folders[""] = "-"
-		for _, folderObj := range vw.state.LatestSync.Folders {
-			folder := utils.Must2(vw.userKey.DecryptString(utils.Must2(crypto.NewEncStringFrom(folderObj.Name))))
-			folders[folderObj.Id] = folder
+		if foundCipher.Notes != "" {
+			fmt.Println("Notes:", foundCipher.Notes)
 		}
-	}
-
-	// List all secrets
-	{
-		fmt.Printf("%s,%s,%s,%s\n", "ID", "Folder", "Name", "Password")
-		for _, cipherObj := range vw.state.LatestSync.Ciphers {
-			key, ok := vw.allkeys[cipherObj.OrganizationId]
-			if !ok {
-				fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], "TODO:no key known ", "~")
-				continue
-			}
-			cipher, err := key.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Name)))
-			if err != nil {
-				fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], "TODO:cannot decrypt this yet", "~")
-				continue
-			}
-
-			pw := "-not-yet-"
-
-			if pwR := cipherObj.Login.Password; pwR != "" {
-				pw = utils.Must2(key.DecryptString(utils.Must2(crypto.NewEncStringFrom(cipherObj.Login.Password))))
-			}
-
-			fmt.Printf("%s,%s,%s,%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipher, pw)
+	case "login.totp":
+		if foundCipher.Login.Totp == "" {
+			fmt.Println("no totp for this entry")
+			return
 		}
+
+		url, err := url.Parse(foundCipher.Login.Totp)
+		if err != nil {
+			log.Fatalf("invalid totp uri: %s", foundCipher.Login.Totp)
+		}
+		totp, err := totpgen(NewTOTPSettingsFromURL(url.Query()))
+		if err != nil {
+			log.Fatalf("invalid totp uri: %s", err)
+		}
+
+		fmt.Println(totp)
+	default:
+		log.Fatalf("unknown field: %s", attr)
 	}
+	return
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -63,4 +65,15 @@ func enableecho() {
 		fmt.Println("error:", err)
 		return
 	}
+}
+
+func askPass() string {
+	var text string
+	disableecho()
+	defer enableecho()
+	reader := bufio.NewReader(os.Stdin)
+	text, _ = reader.ReadString('\n')
+	text = strings.TrimSpace(text)
+	fmt.Println()
+	return text
 }
