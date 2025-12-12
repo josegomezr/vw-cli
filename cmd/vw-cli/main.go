@@ -42,8 +42,9 @@ func main() {
 		return
 	case "unlock":
 		if opts.UnlockOpts.Check {
-			if hasDecryptedSessionKey {
+			if !hasDecryptedSessionKey {
 				fmt.Println("Locked!")
+				os.Exit(1)
 				return
 			}
 			fmt.Println("Unlocked!")
@@ -52,14 +53,16 @@ func main() {
 		if hasDecryptedSessionKey {
 			switch opts.OutputFormat {
 			case "plain":
-				fmt.Println("Session key: ", crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+				encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
+				fmt.Println("Make sure to export the following variable:")
+				fmt.Printf("export VW_SESSION=%q\n", encodedKey)
+				fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
 			case "text":
 				fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
 			}
 			return
 		}
 
-		fmt.Println("Could not load session key, asking for master password...")
 		fmt.Print("Master password: ")
 		masterPassword := askPass()
 		if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
@@ -81,7 +84,10 @@ func main() {
 		}
 		switch opts.OutputFormat {
 		case "plain":
-			fmt.Println("Session key:", crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+			encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
+			fmt.Println("Make sure to export the following variable:")
+			fmt.Printf("export VW_SESSION=%q\n", encodedKey)
+			fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
 		case "text":
 			fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
 		}
@@ -122,7 +128,6 @@ func main() {
 		}
 	case "list":
 		if !hasDecryptedSessionKey {
-			fmt.Println("Could not load session key, asking for master password...")
 			fmt.Print("Master password: ")
 			masterPassword := askPass()
 			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
@@ -144,7 +149,6 @@ func main() {
 		doList(opts)
 	case "show":
 		if !hasDecryptedSessionKey {
-			fmt.Println("Could not load session key, asking for master password...")
 			fmt.Print("Master password: ")
 			masterPassword := askPass()
 			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
@@ -207,13 +211,13 @@ func doList(opts *CLIOpts) {
 				continue
 			}
 			if opts.ListOpts.Organization == cipherObj.OrganizationId || opts.ListOpts.Organization == cipherOrg {
-				fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
+				fmt.Printf("%s|%s/%s|%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 				continue
 			}
 		}
 
 		if opts.ListOpts.Folder == defaultempty {
-			fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
+			fmt.Printf("%s|%s/%s|%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 		} else {
 			cipherFolder, ok := folders[cipherObj.FolderId]
 			if !ok {
@@ -221,7 +225,7 @@ func doList(opts *CLIOpts) {
 			}
 
 			if opts.ListOpts.Folder == cipherObj.FolderId || opts.ListOpts.Folder == cipherFolder {
-				fmt.Printf("%s %s/%s | %s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
+				fmt.Printf("%s|%s/%s|%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 			}
 		}
 	}
