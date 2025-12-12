@@ -454,3 +454,17 @@ func (vw *VW) Sync() (*api.SyncResponse, error) {
 	}
 	return api.NewSyncResponseFromReader(resp.Body)
 }
+
+func (vw *VW) SaveSession() (error) {
+	localencryptedkeydata, err := vw.sessionKey.Encrypt(vw.userKey.Buffer(), encryption_type.AES_GCM_256_B64)
+	if err != nil {
+		fmt.Println("nope, cannot encrypt local master key with session key")
+		return err
+	}
+	vw.state.SessionMasterPw = localencryptedkeydata.String()
+	if err := vw.SaveState(); err != nil {
+		fmt.Println("damn it, what now?", err)
+		return err
+	}
+	return nil
+}

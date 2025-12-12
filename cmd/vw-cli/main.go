@@ -5,7 +5,6 @@ import (
 	"github.com/josegomezr/vw-cli/internal/api"
 	"github.com/josegomezr/vw-cli/internal/crypto"
 	"github.com/josegomezr/vw-cli/internal/crypto/shortcuts"
-	"github.com/josegomezr/vw-cli/internal/encryption_type"
 	"github.com/josegomezr/vw-cli/internal/symmetric_key"
 	"log"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 )
 
 var GLOBAL_VW *VW
+const DefaultEmptyStringValue = "\x00"
 
 func init() {
 	GLOBAL_VW = &VW{}
@@ -41,28 +41,25 @@ func main() {
 	case "help":
 		return
 	case "unlock":
-		if opts.UnlockOpts.Check {
-			if !hasDecryptedSessionKey {
-				fmt.Println("Locked!")
-				os.Exit(1)
-				return
-			}
-			fmt.Println("Unlocked!")
-			return
-		}
-		if hasDecryptedSessionKey {
-			switch opts.OutputFormat {
-			case "plain":
-				encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
-				fmt.Println("Make sure to export the following variable:")
-				fmt.Printf("export VW_SESSION=%q\n", encodedKey)
-				fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
-			case "text":
-				fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
-			}
-			return
-		}
+		doUnlockCommand(opts, hasDecryptedSessionKey)
+		return
+	case "login":
+		doLoginCommand(opts, hasDecryptedSessionKey)
+		return
+	case "list":
+		doListCommand(opts, hasDecryptedSessionKey)
+		return
+	case "show":
+		doShowCommand(opts, hasDecryptedSessionKey)
+		return
+	default:
+		fmt.Printf("Unhandled command: %s\n", opts.Command)
+		os.Exit(1)
+	}	
+}
 
+func loadkeys(hasDecryptedSessionKey bool) {
+	if !hasDecryptedSessionKey {
 		fmt.Print("Master password: ")
 		masterPassword := askPass()
 		if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
@@ -70,112 +67,55 @@ func main() {
 			os.Exit(1)
 			return
 		}
-
-		localencryptedkeydata, err := GLOBAL_VW.sessionKey.Encrypt(GLOBAL_VW.userKey.Buffer(), encryption_type.AES_GCM_256_B64)
-		if err != nil {
-			fmt.Println("nope, cannot encrypt local master key with session key")
-			return
-		}
-		GLOBAL_VW.state.SessionMasterPw = localencryptedkeydata.String()
-		if err := GLOBAL_VW.SaveState(); err != nil {
-			fmt.Println("damn it, what now?", err)
-			os.Exit(1)
-			return
-		}
-		switch opts.OutputFormat {
-		case "plain":
-			encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
-			fmt.Println("Make sure to export the following variable:")
-			fmt.Printf("export VW_SESSION=%q\n", encodedKey)
-			fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
-		case "text":
-			fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
-		}
-		return
-
-	case "login":
-		if GLOBAL_VW.state.Email == "" {
-			fmt.Printf("TODO: Call the procedure here")
-			fmt.Printf("Login via")
-			if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
-				fmt.Println("API")
-				if opts.LoginOpts.ApiClientSecret == "" {
-					fmt.Print("API Secret: ")
-					opts.LoginOpts.ApiClientSecret = askPass()
-				}
-
-				err := GLOBAL_VW.LoginWithAPIKeys(opts.LoginOpts.ApiClientId, opts.LoginOpts.ApiClientSecret)
-				if err != nil {
-					fmt.Println("error:", err)
-					os.Exit(1)
-					return
-				}
-
-				fmt.Println("Logged in!")
-				return
-			} else if opts.LoginOpts.Email != "" {
-				fmt.Println("TODO: this doesn't work yet Email+Master password")
-				fmt.Print("User password: ")
-				err := GLOBAL_VW.LoginWithEmailPassword(opts.LoginOpts.Email, askPass())
-				if err != nil {
-					fmt.Println("error:", err)
-					os.Exit(1)
-					return
-				}
-			}
-		} else {
-			fmt.Println("Logged in as:", GLOBAL_VW.state.Email)
-		}
-	case "list":
-		if !hasDecryptedSessionKey {
-			fmt.Print("Master password: ")
-			masterPassword := askPass()
-			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
-				fmt.Println("Could not decrypt master key")
-				os.Exit(1)
-				return
-			}
-		}
-		if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err != nil {
-			fmt.Println("Could not unlock the store (asymmetric key borkd)...")
-			os.Exit(1)
-			return
-		}
-		if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
-			fmt.Println("Could not unlock the store (organization keys key borkd)...")
-			os.Exit(1)
-			return
-		}
-		doList(opts)
-	case "show":
-		if !hasDecryptedSessionKey {
-			fmt.Print("Master password: ")
-			masterPassword := askPass()
-			if err := GLOBAL_VW.DecryptUserKeynew(masterPassword); err != nil {
-				fmt.Println("Could not decrypt master key")
-				os.Exit(1)
-				return
-			}
-		}
-		if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err != nil {
-			fmt.Println("Could not unlock the store (asymmetric key borkd)...")
-			os.Exit(1)
-			return
-		}
-		if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
-			fmt.Println("Could not unlock the store (organization keys key borkd)...")
-			os.Exit(1)
-			return
-		}
-		doShow(opts)
-	default:
-		fmt.Printf("Unhandled command: %s\n", opts.Command)
+	}
+	if err := GLOBAL_VW.DecryptUserAsymmetricKey(); err != nil {
+		fmt.Println("Could not unlock the store (asymmetric key borkd)...")
 		os.Exit(1)
-	}	
+		return
+	}
+	if err := GLOBAL_VW.DecryptOrganizationKeys(); err != nil {
+		fmt.Println("Could not unlock the store (organization keys key borkd)...")
+		os.Exit(1)
+		return
+	}
 }
 
-func doList(opts *CLIOpts) {
-	defaultempty := "\x00"
+func doLoginCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
+	if GLOBAL_VW.state.Email == "" {
+		fmt.Printf("TODO: Call the procedure here")
+		fmt.Printf("Login via")
+		if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
+			fmt.Println("API")
+			if opts.LoginOpts.ApiClientSecret == "" {
+				fmt.Print("API Secret: ")
+				opts.LoginOpts.ApiClientSecret = askPass()
+			}
+
+			err := GLOBAL_VW.LoginWithAPIKeys(opts.LoginOpts.ApiClientId, opts.LoginOpts.ApiClientSecret)
+			if err != nil {
+				fmt.Println("error:", err)
+				os.Exit(1)
+				return
+			}
+
+			fmt.Println("Logged in!")
+			return
+		} else if opts.LoginOpts.Email != "" {
+			fmt.Println("TODO: this doesn't work yet Email+Master password")
+			fmt.Print("User password: ")
+			err := GLOBAL_VW.LoginWithEmailPassword(opts.LoginOpts.Email, askPass())
+			if err != nil {
+				fmt.Println("error:", err)
+				os.Exit(1)
+				return
+			}
+		}
+	} else {
+		fmt.Println("Logged in as:", GLOBAL_VW.state.Email)
+	}
+}
+func doListCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
+	loadkeys(hasDecryptedSessionKey)
 	orgs := make(map[string]string)
 	folders := make(map[string]string)
 	folders[""] = ""
@@ -205,7 +145,7 @@ func doList(opts *CLIOpts) {
 			continue
 		}
 
-		if opts.ListOpts.Organization != defaultempty {
+		if opts.ListOpts.Organization != DefaultEmptyStringValue {
 			cipherOrg, ok := orgs[cipherObj.OrganizationId]
 			if !ok {
 				continue
@@ -216,7 +156,7 @@ func doList(opts *CLIOpts) {
 			}
 		}
 
-		if opts.ListOpts.Folder == defaultempty {
+		if opts.ListOpts.Folder == DefaultEmptyStringValue {
 			fmt.Printf("%s|%s/%s|%s\n", cipherObj.Id, folders[cipherObj.FolderId], cipherObj.Name, orgs[cipherObj.OrganizationId])
 		} else {
 			cipherFolder, ok := folders[cipherObj.FolderId]
@@ -230,9 +170,8 @@ func doList(opts *CLIOpts) {
 		}
 	}
 }
-
-func doShow(opts *CLIOpts) {
-	defaultempty := "\x00"
+func doShowCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
+	loadkeys(hasDecryptedSessionKey)
 
 	id := opts.ShowOpts.Cipher
 	attr := opts.ShowOpts.Attribute
@@ -252,13 +191,13 @@ func doShow(opts *CLIOpts) {
 	}
 
 	for _, cipherObj := range GLOBAL_VW.state.LatestSync.Ciphers {
-		if wantedOrg := opts.ShowOpts.Organization; wantedOrg != defaultempty {
+		if wantedOrg := opts.ShowOpts.Organization; wantedOrg != DefaultEmptyStringValue {
 			if wantedOrg != cipherObj.OrganizationId {
 				continue
 			}
 		}
 
-		if wantedFolder := opts.ShowOpts.Folder; wantedFolder != defaultempty {
+		if wantedFolder := opts.ShowOpts.Folder; wantedFolder != DefaultEmptyStringValue {
 			_, ok := folders[cipherObj.FolderId]
 
 			if !ok {
@@ -358,4 +297,41 @@ func doShow(opts *CLIOpts) {
 		log.Fatalf("unknown field: %s", attr)
 	}
 	return
+}
+func doUnlockCommand(opts *CLIOpts, hasDecryptedSessionKey bool) {
+	if opts.UnlockOpts.Check {
+		if !hasDecryptedSessionKey {
+			fmt.Println("Locked!")
+			os.Exit(1)
+			return
+		}
+		fmt.Println("Unlocked!")
+		return
+	}
+	if hasDecryptedSessionKey {
+		switch opts.OutputFormat {
+		case "plain":
+			encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
+			fmt.Println("Make sure to export the following variable:")
+			fmt.Printf("export VW_SESSION=%q\n", encodedKey)
+			fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
+		case "text":
+			fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+		}
+		return
+	}
+
+	loadkeys(hasDecryptedSessionKey)
+	if err := GLOBAL_VW.SaveSession(); err != nil {
+		os.Exit(1)
+	}
+	switch opts.OutputFormat {
+	case "plain":
+		encodedKey := crypto.B64e(GLOBAL_VW.sessionKey.Encryption())
+		fmt.Println("Make sure to export the following variable:")
+		fmt.Printf("export VW_SESSION=%q\n", encodedKey)
+		fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
+	case "text":
+		fmt.Println(crypto.B64e(GLOBAL_VW.sessionKey.Encryption()))
+	}
 }
