@@ -9,13 +9,16 @@ type LoginObject struct {
 }
 
 type CipherObject struct {
-	Id             string      `json:"id"`
-	FolderId       string      `json:"folderId"`
-	Name           string      `json:"name" encryptedString:"true"`
-	Object         string      `json:"object"`
-	OrganizationId string      `json:"organizationId"`
-	Notes          string      `json:"notes" encryptedString:"true"`
-	Login          LoginObject `json:"login"`
+	Id               string      `json:"id"`
+	Name             string      `json:"name" encryptedString:"true"`
+	Object           string      `json:"object"`
+	FolderId         string      `json:"folderId"`
+	OrganizationId   string      `json:"organizationId"`
+	CollectionIds    []string    `json:"collectionIds"`
+	Notes            string      `json:"notes" encryptedString:"true"`
+	Login            LoginObject `json:"login"`
+	FolderName       string
+	OrganizationName string
 }
 
 type CollectionObject struct {

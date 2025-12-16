@@ -171,6 +171,4 @@ func NewEncStringFrom(rawkeycontent string) (interfaces.EncryptedString, error) 
 	default:
 		return nil, fmt.Errorf("I don't know how to handle: %v keys", encType)
 	}
-
-	return &encString{}, nil
 }

@@ -36,7 +36,7 @@ func AES_CBC_256_decrypt(key, iv, data []byte) ([]byte, error) {
 
 func AES_CBC_256_HMAC_decrypt(key, hmacKey, iv, data, mac []byte) ([]byte, error) {
 	if !validMAC(iv, data, mac, hmacKey) {
-		return nil, fmt.Errorf("Invalid HMAC")
+		return nil, fmt.Errorf("Cannot decrypt AES-CBC-256: Invalid HMAC")
 	}
 
 	block, err := aes.NewCipher(key)

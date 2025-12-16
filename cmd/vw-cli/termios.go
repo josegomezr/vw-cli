@@ -80,3 +80,15 @@ func askPass(prompt string) string {
 	fmt.Println()
 	return text
 }
+
+func askString(prompt string) string {
+	if prompt != "" {
+		fmt.Print(prompt)
+	}
+	var text string
+	reader := bufio.NewReader(os.Stdin)
+	text, _ = reader.ReadString('\n')
+	text = strings.TrimSpace(text)
+	fmt.Println()
+	return text
+}
