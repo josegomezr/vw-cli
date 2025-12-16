@@ -44,13 +44,22 @@ type VWState struct {
 }
 
 type VW struct {
-	cfgdir        string
-	cfg           *VWConfig
-	state         *VWState
-	sessionKey    symmetric_key.SymmetricKey
-	userKey       symmetric_key.SymmetricKey
-	asymmetricKey symmetric_key.SymmetricKey
-	allkeys       map[string]symmetric_key.SymmetricKey
+	cfgdir                 string
+	cfg                    *VWConfig
+	state                  *VWState
+	sessionKey             symmetric_key.SymmetricKey
+	userKey                symmetric_key.SymmetricKey
+	asymmetricKey          symmetric_key.SymmetricKey
+	allkeys                map[string]symmetric_key.SymmetricKey
+	hasDecryptedSessionKey bool
+}
+
+func NewVW() *VW {
+	return &VW{}
+}
+func (vw *VW) WithConfigDir(cfgdir string) *VW {
+	vw.cfgdir = cfgdir
+	return vw
 }
 
 // TODO: bring here a proper http client that takes care of the auth using the
@@ -254,6 +263,16 @@ func (vw *VW) Login() (err error) {
 	return nil
 }
 
+func (vw *VW) LoadConfigAndState() error {
+	if err := vw.LoadConfig(); err != nil {
+		return err
+	}
+	if err := vw.LoadState(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (vw *VW) LoadConfig() error {
 	if vw == nil {
 		return fmt.Errorf("not initialized")
@@ -296,6 +315,33 @@ func (vw *VW) LoadState() error {
 	}
 
 	return nil
+}
+
+func (vw *VW) AllFolders() (ChainedMap, error) {
+	if vw.state == nil {
+		return nil, fmt.Errorf("Not initialized")
+	}
+	damap := make(ChainedMap)
+	for _, folderObj := range vw.state.LatestSync.Folders {
+		if err := shortcuts.DecryptStruct(&folderObj, vw.userKey); err != nil {
+			return nil, err
+		}
+		damap[folderObj.Name] = folderObj.Name
+		damap[folderObj.Id] = folderObj.Name
+	}
+	return damap, nil
+}
+
+func (vw *VW) AllOrganizations() (ChainedMap, error) {
+	if vw.state == nil {
+		return nil, fmt.Errorf("Not initialized")
+	}
+	damap := make(ChainedMap)
+	for _, orgObj := range vw.state.LatestSync.Profile.Organizations {
+		damap[orgObj.Name] = orgObj.Name
+		damap[orgObj.Id] = orgObj.Name
+	}
+	return damap, nil
 }
 
 func (vw *VW) DecryptUserKeynew(masterpassword string) error {
@@ -364,7 +410,25 @@ func (vw *VW) DecryptUserKey() error {
 	return nil
 }
 
-func (vw *VW) GenerateSessionKey() symmetric_key.SymmetricKey {
+func (vw *VW) LoadSessionKey(session string) {
+	if err := vw.RecoverSessionKey(session); err != nil {
+		fmt.Println("cannot recover key")
+		vw.GenerateRandomSessionKey()
+	}
+}
+
+func (vw *VW) LoadUserKeyFromSessionKey(masterpwfn func() string) error {
+	if err := vw.DecryptUserKeyFromSessionKey(); err != nil {
+		fmt.Println("cannot recover user key: ", err)
+		masterPassword := masterpwfn()
+		if err := vw.DecryptUserKeynew(masterPassword); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (vw *VW) GenerateRandomSessionKey() {
 	buf := make([]byte, 32)
 	rand.Read(buf)
 	k, err := symmetric_key.NewSymmetricKeyCtor(buf, encryption_type.AES_GCM_256_B64)
@@ -372,30 +436,39 @@ func (vw *VW) GenerateSessionKey() symmetric_key.SymmetricKey {
 		fmt.Println("this should really never fail")
 		panic(err)
 	}
-	return k
+	vw.sessionKey = k
 }
 
-func (vw *VW) LoadSessionKey(sessionkey string) error {
-	if sessionkey == "" {
-		simkey := vw.GenerateSessionKey()
-		vw.sessionKey = simkey
-	} else {
-		buf, err := crypto.B64d(sessionkey)
-		if err != nil {
-			return err
-		}
-		simkey, err := symmetric_key.NewSymmetricKeyCtor(buf, encryption_type.AES_GCM_256_B64)
-		if err != nil {
-			simkey = vw.GenerateSessionKey()
-		}
-		vw.sessionKey = simkey
-	}
-
-	userKey, err := shortcuts.DecryptSymmetricKey(vw.sessionKey, vw.state.SessionMasterPw)
+func (vw *VW) DecryptUserKeyFromSessionKey() error {
+	userKey, err := shortcuts.DecryptSymmetricKeyCtor(vw.sessionKey, vw.state.SessionMasterPw, encryption_type.AES_CBC_256_HMAC_SHA_256_B64)
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
 	vw.userKey = userKey
+	return nil
+}
+
+func (vw *VW) RecoverSessionKey(sessionkey string) error {
+	if vw.hasDecryptedSessionKey {
+		return nil
+	}
+
+	if sessionkey == "" {
+		return fmt.Errorf("ask for key (no session key)")
+	}
+
+	buf, err := crypto.B64d(sessionkey)
+	if err != nil {
+		return err
+	}
+	simkey, err := symmetric_key.NewSymmetricKeyCtor(buf, encryption_type.AES_GCM_256_B64)
+	if err != nil {
+		return err
+	}
+
+	vw.sessionKey = simkey
+	vw.hasDecryptedSessionKey = true
 	return nil
 }
 
@@ -470,4 +543,29 @@ func (vw *VW) SaveSession() error {
 		return err
 	}
 	return nil
+}
+
+func loadkeys(vw *VW, session string) {
+	vw.LoadSessionKey(session)
+
+	lambda := func() string {
+		return askPass("Master password: ")
+	}
+
+	if err := vw.LoadUserKeyFromSessionKey(lambda); err != nil {
+		fmt.Println("Could not decrypt master key")
+		os.Exit(1)
+		return
+	}
+
+	if err := vw.DecryptUserAsymmetricKey(); err != nil {
+		fmt.Println("Could not unlock the store (asymmetric key borkd)...")
+		os.Exit(1)
+		return
+	}
+	if err := vw.DecryptOrganizationKeys(); err != nil {
+		fmt.Println("Could not unlock the store (organization keys key borkd)...")
+		os.Exit(1)
+		return
+	}
 }

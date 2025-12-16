@@ -103,24 +103,27 @@ func NewSymmetricKey(buf []byte) (SymmetricKey, error) {
 		// return nil, fmt.Errorf("Unknown symmetric key type with length=%d", l)
 	}
 }
-func NewSymmetricKeyCtor(buf []byte, enctype encryption_type.EncryptionType) (SymmetricKey, error) {
+func NewSymmetricKeyCtor(originalBuffer []byte, enctype encryption_type.EncryptionType) (SymmetricKey, error) {
+	fixedBuff := make([]byte, 64)
+	copy(fixedBuff, originalBuffer)
+
 	switch enctype {
 	case encryption_type.AES_GCM_256_B64:
 		return &symmetricKey{
 			keytype:        enctype,
-			encryption:     buf[0:32],
+			encryption:     fixedBuff[0:32],
 			authentication: nil,
 		}, nil
 	case encryption_type.AES_CBC_256_HMAC_SHA_256_B64:
 		return &symmetricKey{
 			keytype:        enctype,
-			encryption:     buf[0:32],
-			authentication: buf[32:64],
+			encryption:     fixedBuff[0:32],
+			authentication: fixedBuff[32:64],
 		}, nil
 	case encryption_type.RSA2048_OAEP_SHA_1_B64:
 		return &symmetricKey{
 			keytype:    enctype,
-			encryption: buf,
+			encryption: fixedBuff,
 		}, nil
 	default:
 		return nil, fmt.Errorf("Unknown symmetric key type=%d", enctype)
