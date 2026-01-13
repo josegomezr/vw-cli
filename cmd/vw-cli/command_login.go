@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/josegomezr/vw-cli/internal/command"
+	"github.com/josegomezr/vw-cli/internal/crypto"
 	"os"
 )
 
@@ -76,5 +77,22 @@ func doEmailPwLogin() error {
 		os.Exit(1)
 	}
 	fmt.Println("Logged in!")
+
+	askpass := func() string {
+		return pw
+	}
+
+	if err := GlobalVW.LoadKeys(CLIOPTS.SessionToken, askpass); err != nil {
+		return err
+	}
+
+	if err := GlobalVW.SaveSession(); err != nil {
+		return err
+	}
+
+	encodedKey := crypto.B64e(GlobalVW.sessionKey.Encryption())
+	fmt.Println("Make sure to export the following variable:")
+	fmt.Printf("export VW_SESSION=%q\n", encodedKey)
+	fmt.Printf("Or pass --session-token %q to the next vw-cli invocations\n", encodedKey)
 	return nil
 }
