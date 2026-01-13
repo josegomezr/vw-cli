@@ -110,6 +110,7 @@ func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) 
 	}
 
 	vw.state.LatestSync = *syncObj
+	vw.state.Email = vw.state.LatestSync.Profile.Email
 
 	if err := vw.SaveState(); err != nil {
 		return fmt.Errorf("error-state-file: %w", err)
@@ -197,72 +198,6 @@ func (vw *VW) LoginWithAPIKeys(clientId, clientSecret string) (err error) {
 	return nil
 }
 
-func (vw *VW) Login() (err error) {
-	if vw == nil {
-		return fmt.Errorf("not initialized")
-	}
-
-	if vw.cfg == nil {
-		return fmt.Errorf("not configured")
-	}
-
-	if vw.state != nil {
-		exp := time.Unix(vw.state.ExpiresAtEpoch, 0)
-
-		if time.Now().Before(exp) {
-			return nil
-		}
-	} else {
-		vw.state = &VWState{}
-	}
-
-	uri := "/identity/connect/token"
-	bwUrl := vw.cfg.BitwardenURL + uri
-
-	qs := url.Values{}
-	qs.Set("grant_type", "client_credentials")
-	qs.Set("scope", "api")
-	qs.Set("device_identifier", "vw-cli")
-	qs.Set("device_name", "vw-cli name")
-	qs.Set("device_type", "CLI")
-	qs.Set("client_id", vw.cfg.ClientId)
-	qs.Set("client_secret", vw.cfg.ClientSecret)
-
-	resp, err := http.PostForm(bwUrl, qs)
-
-	if err != nil {
-		return fmt.Errorf("http-error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		io.Copy(os.Stdout, resp.Body)
-		return fmt.Errorf("http-error-not-200")
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(vw.state); err != nil {
-		io.Copy(os.Stdout, resp.Body)
-		return fmt.Errorf("error-decode-state: %w", err)
-	}
-	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
-
-	if err := vw.SaveState(); err != nil {
-		return fmt.Errorf("error-state-file: %w", err)
-	}
-
-	syncObj, err := vw.Sync()
-	if err != nil {
-		return fmt.Errorf("sync-state: %w", err)
-	}
-
-	vw.state.LatestSync = *syncObj
-
-	if err := vw.SaveState(); err != nil {
-		return fmt.Errorf("error-state-file: %w", err)
-	}
-	return nil
-}
-
 func (vw *VW) LoadConfigAndState() error {
 	if err := vw.LoadConfig(); err != nil {
 		return err
@@ -344,7 +279,7 @@ func (vw *VW) AllOrganizations() (ChainedMap, error) {
 	return damap, nil
 }
 
-func (vw *VW) DecryptUserKeynew(masterpassword string) error {
+func (vw *VW) DecryptUserKey(masterpassword string) error {
 	if vw == nil {
 		return fmt.Errorf("not initialized")
 	}
@@ -379,37 +314,6 @@ func (vw *VW) DecryptUserAsymmetricKey() error {
 	return nil
 }
 
-func (vw *VW) DecryptUserKey() error {
-	if vw == nil {
-		return fmt.Errorf("not initialized")
-	}
-	if vw.userKey != nil {
-		return nil
-	}
-
-	masterkey, err := deriveDecryptionKeyFromEmailPassword(
-		vw.state.Email,
-		vw.cfg.Password,
-	)
-	if err != nil {
-		return fmt.Errorf("error: could not derive master key from email/password: %w", err)
-	}
-
-	symkey, err := shortcuts.DecryptSymmetricKey(masterkey, vw.state.Key)
-	if err != nil {
-		return fmt.Errorf("error: could not decrypt user symmetric key: %w", err)
-	}
-	vw.userKey = symkey
-
-	privKey, err := shortcuts.DecryptSymmetricKey(vw.userKey, vw.state.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("error: could not decrypt user private key: %w", err)
-	}
-	vw.asymmetricKey = privKey
-
-	return nil
-}
-
 func (vw *VW) LoadSessionKey(session string) {
 	if err := vw.RecoverSessionKey(session); err != nil {
 		vw.GenerateRandomSessionKey()
@@ -419,7 +323,7 @@ func (vw *VW) LoadSessionKey(session string) {
 func (vw *VW) LoadUserKeyFromSessionKey(masterpwfn func() string) error {
 	if err := vw.DecryptUserKeyFromSessionKey(); err != nil {
 		masterPassword := masterpwfn()
-		if err := vw.DecryptUserKeynew(masterPassword); err != nil {
+		if err := vw.DecryptUserKey(masterPassword); err != nil {
 			return fmt.Errorf("error: could not decrypt user key: %w", err)
 		}
 	}
