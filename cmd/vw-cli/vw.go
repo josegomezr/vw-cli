@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"bytes"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,8 +30,8 @@ type VWConfig struct {
 
 type VWState struct {
 	AccessToken         string           `json:"access_token"`
-	ExpiresAtEpoch      int64            `json:"expires_at_epoch"`
-	ExpiresIn           int64            `json:"expires_in"`
+	ExpiresAtEpoch      int64            `json:"expires_at_epoch,omitempty"`
+	ExpiresIn           int64            `json:"expires_i"n`
 	Kdf                 int64            `json:"Kdf"`
 	KdfIterations       int64            `json:"KdfIterations"`
 	KdfMemory           string           `json:"KdfMemory"`
@@ -38,9 +39,9 @@ type VWState struct {
 	Key                 string           `json:"Key"`
 	PrivateKey          string           `json:"PrivateKey"`
 	ResetMasterPassword bool             `json:"ResetMasterPassword"`
-	LatestSync          api.SyncResponse `json:"latest_sync"`
-	Email               string           `json:"email"`
-	SessionMasterPw     string           `json:"session_master_password"`
+	LatestSync          api.SyncResponse `json:"latest_sync,omitempty"`
+	Email               string           `json:"email,omitempty"`
+	SessionMasterPw     string           `json:"session_master_password,omitempty"`
 }
 
 type VW struct {
@@ -65,9 +66,28 @@ func (vw *VW) WithConfigDir(cfgdir string) *VW {
 // TODO: bring here a proper http client that takes care of the auth using the
 // transport interface.
 
-func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) {
+func (vw *VW) LoginWithEmailPassword(email string, password string, bitwardenURL string) (err error) {
+	if vw.state != nil {
+		exp := time.Unix(vw.state.ExpiresAtEpoch, 0)
+
+		if time.Now().Before(exp) {
+			return nil
+		}
+	} else {
+		vw.state = &VWState{}
+	}
+
 	uri := "/identity/connect/token"
-	bwUrl := vw.cfg.BitwardenURL + uri
+	bwUrl := ""
+	if vw.cfg != nil {
+		bwUrl = vw.cfg.BitwardenURL
+	}
+	if bitwardenURL != "" {
+		bwUrl = bitwardenURL
+	}
+
+	vw.cfg.BitwardenURL = bwUrl
+	bwUrl += uri
 
 	khash, err := hashEmailPassword(email, password)
 	if err != nil {
@@ -90,14 +110,17 @@ func (vw *VW) LoginWithEmailPassword(email string, password string) (err error) 
 	}
 	defer resp.Body.Close()
 
+	buf := new(bytes.Buffer)
+	io.Copy(buf, resp.Body)
+	// fmt.Println(buf.String())
+	vw.SaveConfig()
+
 	if resp.StatusCode != 200 {
-		io.Copy(os.Stdout, resp.Body)
 		return fmt.Errorf("http-error-not-200")
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(vw.state); err != nil {
-		io.Copy(os.Stdout, resp.Body)
-		return fmt.Errorf("error-decode-state: %w", err)
+	if err := json.NewDecoder(buf).Decode(vw.state); err != nil {
+		return fmt.Errorf("error-decode-state: %w. resp=%s", err, buf.String())
 	}
 
 	vw.state.ExpiresAtEpoch = time.Now().Add(time.Duration(vw.state.ExpiresIn) * time.Second).Unix()
@@ -126,6 +149,18 @@ func (vw *VW) SaveState() (err error) {
 	defer file.Close()
 	if err := json.NewEncoder(file).Encode(vw.state); err != nil {
 		return fmt.Errorf("error-flush-state: %w", err)
+	}
+	return
+}
+
+func (vw *VW) SaveConfig() (err error) {
+	file, err := os.Create(filepath.Join(vw.cfgdir, "config.config"))
+	if err != nil {
+		return fmt.Errorf("error-config-file: %w", err)
+	}
+	defer file.Close()
+	if err := json.NewEncoder(file).Encode(vw.cfg); err != nil {
+		return fmt.Errorf("error-flush-config: %w", err)
 	}
 	return
 }
@@ -168,6 +203,7 @@ func (vw *VW) LoginWithAPIKeys(clientId, clientSecret string) (err error) {
 	}
 	defer resp.Body.Close()
 
+	vw.SaveConfig()
 	if resp.StatusCode != 200 {
 		io.Copy(os.Stdout, resp.Body)
 		return fmt.Errorf("http-error-not-200")
@@ -209,6 +245,9 @@ func (vw *VW) LoadConfigAndState() error {
 }
 
 func (vw *VW) LoadConfig() error {
+	cfg := VWConfig{}
+	vw.cfg = &cfg
+
 	if vw == nil {
 		return fmt.Errorf("not initialized")
 	}
@@ -219,13 +258,11 @@ func (vw *VW) LoadConfig() error {
 	}
 	defer file.Close()
 
-	cfg := VWConfig{}
 
 	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
 		return fmt.Errorf("error-decode-config-file: %w", err)
 	}
 
-	vw.cfg = &cfg
 	return nil
 }
 
@@ -420,15 +457,17 @@ func (vw *VW) Sync() (*api.SyncResponse, error) {
 	req.Header.Add("Authorization", "Bearer "+vw.state.AccessToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		io.Copy(os.Stdout, resp.Body)
 		return nil, fmt.Errorf("http-error: %w", err)
 	}
 	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	io.Copy(buf, resp.Body)
+
 	if resp.StatusCode != 200 {
-		io.Copy(os.Stdout, resp.Body)
+		fmt.Println(buf.String())
 		return nil, fmt.Errorf("bad status code for sync")
 	}
-	return api.NewSyncResponseFromReader(resp.Body)
+	return api.NewSyncResponseFromReader(buf)
 }
 
 func (vw *VW) SaveSession() error {

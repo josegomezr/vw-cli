@@ -68,17 +68,9 @@ func enableecho() {
 }
 
 func askPass(prompt string) string {
-	if prompt != "" {
-		fmt.Print(prompt)
-	}
-	var text string
 	disableecho()
 	defer enableecho()
-	reader := bufio.NewReader(os.Stdin)
-	text, _ = reader.ReadString('\n')
-	text = strings.TrimSpace(text)
-	fmt.Println()
-	return text
+	return askString(prompt)	
 }
 
 func askString(prompt string) string {

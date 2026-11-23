@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+var errLogger *log.Logger
+
 func init() {
 	ShowCommand.Flags().BoolVar(&CLIOPTS.ShowOpts.WithPassword, "with-password", false, "reveal password")
 	ShowCommand.Flags().BoolVar(&CLIOPTS.ShowOpts.WithTotpSource, "with-totp-source", false, "reveal TOTP raw value")
@@ -18,7 +20,10 @@ func init() {
 
 	ShowCommand.Flags().StringVar(&CLIOPTS.ShowOpts.Folder, "folder", DefaultEmptyStringValue, "`folder` id or name")
 	ShowCommand.Flags().StringVar(&CLIOPTS.ShowOpts.Organization, "organization", DefaultEmptyStringValue, "`organization` id or name")
+
+	errLogger = log.New(os.Stderr, "[vw-cli show] ", log.Lmsgprefix | log.Ldate | log.Ltime)
 }
+
 
 var ShowCommand = &command.Command{
 	Name:    "show {secret-id-or-name} [attribute = all]",
@@ -38,19 +43,17 @@ func doShowCommand(c *command.Command, args []string) error {
 
 	allOrgs, err := GlobalVW.AllOrganizations()
 	if err != nil {
-		fmt.Println("TODO: handle this error, folder could not be decrypted")
+		errLogger.Println("TODO: handle this error, folder could not be decrypted")
 	}
 	allFolders, err := GlobalVW.AllFolders()
 	if err != nil {
-		fmt.Println("TODO: handle this error, folder could not be decrypted")
+		errLogger.Println("TODO: handle this error, folder could not be decrypted")
 	}
 	if c.IsFlagPresent("folder") && !allFolders.Has(opts.ListOpts.Folder) {
-		fmt.Println("Unknown folder: ", opts.ListOpts.Folder)
-		os.Exit(1)
+		errLogger.Fatalf("Unknown folder: %s", opts.ListOpts.Folder)
 	}
 	if c.IsFlagPresent("organization") && !allOrgs.Has(opts.ListOpts.Organization) {
-		fmt.Println("Unknown org: ", opts.ListOpts.Organization)
-		os.Exit(1)
+		errLogger.Fatalf("Unknown org: %s", opts.ListOpts.Organization)
 	}
 
 	matchesOrganization := func(givenOrg string, cipherObj *api.CipherObject, orgs *ChainedMap) (found bool) {
@@ -88,11 +91,13 @@ func doShowCommand(c *command.Command, args []string) error {
 	for _, cipherObj := range GlobalVW.AllCiphers() {
 		key, ok := GlobalVW.KeyForOrg(cipherObj.OrganizationId)
 		if !ok {
-			log.Printf("Unknown organization key for cipher %s, skipping", cipherObj.Id)
+			errLogger.Printf("ORGID: %+v", cipherObj)
+			errLogger.Printf("Unknown organization key for cipher %s, skipping", cipherObj.Id)
 			continue
 		}
 		if err := shortcuts.DecryptStruct(&cipherObj, key); err != nil {
-			fmt.Println("TODO: handle this error, cipher could not be decrypted")
+			errLogger.Printf("ORGID: %+v", cipherObj)
+			errLogger.Printf("TODO: handle this error, cipher could not be decrypted: %s", err)
 			continue
 		}
 

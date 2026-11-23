@@ -11,6 +11,7 @@ func init() {
 	LoginCommand.Flags().BoolVar(&CLIOPTS.LoginOpts.Force, "force", false, "Force/Overwrite login")
 	LoginCommand.Flags().StringVar(&CLIOPTS.LoginOpts.ApiClientId, "api-client-id", "", "OAuth2 `client-id` for API authentication")
 	LoginCommand.Flags().StringVar(&CLIOPTS.LoginOpts.ApiClientSecret, "api-client-secret", "", "OAuth2 `client-secret` for API authentication")
+	LoginCommand.Flags().StringVar(&CLIOPTS.LoginOpts.BitwardenURL, "bitwarden-url", "", "Bitwarden `URL`")
 	LoginCommand.Flags().StringVar(&CLIOPTS.LoginOpts.Email, "email", "", "Vault `email`")
 }
 
@@ -24,10 +25,13 @@ var LoginCommand = &command.Command{
 func doLogin(c *command.Command, args []string) error {
 	opts := CLIOPTS
 
-	if GlobalVW.state.Email != "" && !opts.LoginOpts.Force {
-		fmt.Println("Logged in as:", GlobalVW.state.Email)
-		return nil
+	if GlobalVW.state != nil {
+		if GlobalVW.state.Email != "" && !opts.LoginOpts.Force {
+			fmt.Println("Logged in as:", GlobalVW.state.Email)
+			return nil
+		}
 	}
+
 
 	if opts.LoginOpts.ApiClientId != "" || opts.LoginOpts.ApiClientSecret != "" {
 		return doApiLogin()
@@ -56,10 +60,16 @@ func doApiLogin() error {
 func doEmailPwLogin() error {
 	opts := CLIOPTS
 	fmt.Println("Log-in Email+Master password")
-	email := GlobalVW.state.Email
-	if email == "" {
+	email := ""
+
+	if GlobalVW.state != nil && GlobalVW.state.Email != "" {
+		email = GlobalVW.state.Email
+	}
+
+	if opts.LoginOpts.Email != "" {
 		email = opts.LoginOpts.Email
 	}
+
 	if email == "" {
 		email = askString("Email: ")
 	}
@@ -71,7 +81,7 @@ func doEmailPwLogin() error {
 		pw = askPass("User password: ")
 	}
 
-	err := GlobalVW.LoginWithEmailPassword(email, pw)
+	err := GlobalVW.LoginWithEmailPassword(email, pw, opts.LoginOpts.BitwardenURL)
 	if err != nil {
 		fmt.Println("error:", err)
 		os.Exit(1)
